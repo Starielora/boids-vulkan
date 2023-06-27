@@ -7,3 +7,5 @@ project(boids-vulkan)
     add_executable(boids main.cpp)
 
     target_link_libraries(boids PRIVATE Vulkan::Vulkan glm glfw)
+
+    set_target_properties(boids PROPERTIES CXX_STANDARD 20)
