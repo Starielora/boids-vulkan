@@ -27,6 +27,7 @@ auto create_glfw_window()
 
 VkBool32 debug_callback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity, VkDebugUtilsMessageTypeFlagsEXT messageTypes, const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData, void* pUserData)
 {
+    // TODO is there any message which has several types?
     const auto type = [messageTypes]()
     {
         auto type = std::string{};
@@ -143,8 +144,58 @@ auto check_instance_layers(const std::vector<const char*>& requested_layers)
     return found;
 }
 
+bool is_device_suitable(VkPhysicalDevice physical_device)
+{
+    auto props = VkPhysicalDeviceProperties{};
+    vkGetPhysicalDeviceProperties(physical_device, &props);
+
+    spdlog::trace("Checking {}", props.deviceName);
+
+    auto count = uint32_t{ 0 };
+    vkGetPhysicalDeviceQueueFamilyProperties(physical_device, &count, nullptr);
+    auto queue_props = std::vector<VkQueueFamilyProperties>(count);
+    vkGetPhysicalDeviceQueueFamilyProperties(physical_device, &count, queue_props.data());
+    assert(queue_props.size() == count);
+
+    for (int i = 0; const auto& prop : queue_props)
+    {
+        const bool supports_graphics = prop.queueFlags & VK_QUEUE_GRAPHICS_BIT;
+        const bool supports_compute = prop.queueFlags & VK_QUEUE_COMPUTE_BIT;
+        const bool supports_transfer = prop.queueFlags & VK_QUEUE_TRANSFER_BIT;
+        spdlog::info("Queue family {}; count: {} | GRAPHICS {:^7} | COMPUTE {:^7} | TRANSFER {:^7} | ", i, prop.queueCount, supports_graphics, supports_compute, supports_transfer);
+        i++;
+
+        if (supports_graphics)
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+auto pick_physical_device(VkInstance instance)
+{
+    auto count = uint32_t{ 0 };
+    VK_CHECK(vkEnumeratePhysicalDevices(instance, &count, nullptr));
+    auto physical_devices = std::vector<VkPhysicalDevice>(count);
+    VK_CHECK(vkEnumeratePhysicalDevices(instance, &count, physical_devices.data()));
+    assert(count == physical_devices.size());
+
+    for (const auto& physical_device : physical_devices)
+    {
+        if (is_device_suitable(physical_device))
+        {
+            return physical_device;
+        }
+    }
+
+    throw std::runtime_error("No suitable physical device found");
+}
+
 int main()
 {
+    spdlog::set_level(spdlog::level::trace);
     spdlog::info("Start");
     VK_CHECK(volkInitialize());
 
@@ -171,6 +222,8 @@ int main()
 
     auto debug_messenger = VkDebugUtilsMessengerEXT{ 0 };
     VK_CHECK(vkCreateDebugUtilsMessengerEXT(vk_instance, &debug_utils_messenger_create_info, nullptr, &debug_messenger));
+
+    const auto physical_device = pick_physical_device(vk_instance);
 
     while (!glfwWindowShouldClose(window))
     {
