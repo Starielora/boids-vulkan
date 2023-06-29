@@ -5,6 +5,8 @@
 #include <Volk/volk.h>
 #include <GLFW/glfw3.h>
 
+#include <spdlog/spdlog.h>
+
 #include <cassert>
 #include <vector>
 #include <limits>
@@ -25,8 +27,50 @@ auto create_glfw_window()
 
 VkBool32 debug_callback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity, VkDebugUtilsMessageTypeFlagsEXT messageTypes, const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData, void* pUserData)
 {
-    // TODO spdlog
-    std::cerr << pCallbackData->pMessage << '\n';
+    const auto type = [messageTypes]()
+    {
+        auto type = std::string{};
+        if (messageTypes & VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT)
+        {
+            type += "[General]";
+        }
+
+        if (messageTypes & VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT)
+        {
+            type += "[Performance]";
+        }
+
+        if (messageTypes & VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT)
+        {
+            type += "[Validation]";
+        }
+
+        return type;
+    }();
+
+    // TODO improve formatting
+    const auto message = fmt::format("{} ({}): {}", type, pCallbackData->pMessageIdName, pCallbackData->pMessage);
+
+    // TODO this doesn't look too good
+    if (messageSeverity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT)
+    {
+        spdlog::info(message);
+    }
+
+    if (messageSeverity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT)
+    {
+        spdlog::error(message);
+    }
+
+    if (messageSeverity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT)
+    {
+        spdlog::warn(message);
+    }
+
+    if (messageSeverity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT)
+    {
+        spdlog::trace(message);
+    }
 
     return VK_FALSE;
 }
@@ -101,6 +145,7 @@ auto check_instance_layers(const std::vector<const char*>& requested_layers)
 
 int main()
 {
+    spdlog::info("Start");
     VK_CHECK(volkInitialize());
 
     const auto glfw_initialized = glfwInit();
