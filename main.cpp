@@ -10,6 +10,7 @@
 #include <cassert>
 #include <vector>
 #include <limits>
+#include <optional>
 
 // TODO error message
 #define VK_CHECK(f) do { const auto result = f; if(result != VK_SUCCESS) throw std::runtime_error("");} while(0)
@@ -144,34 +145,28 @@ auto check_instance_layers(const std::vector<const char*>& requested_layers)
     return found;
 }
 
-bool is_device_suitable(VkPhysicalDevice physical_device)
+std::optional<uint32_t> pick_family_index(VkQueueFlagBits bits, const std::vector<VkQueueFamilyProperties>& queue_props)
 {
-    auto props = VkPhysicalDeviceProperties{};
-    vkGetPhysicalDeviceProperties(physical_device, &props);
-
-    spdlog::trace("Checking {}", props.deviceName);
-
-    auto count = uint32_t{ 0 };
-    vkGetPhysicalDeviceQueueFamilyProperties(physical_device, &count, nullptr);
-    auto queue_props = std::vector<VkQueueFamilyProperties>(count);
-    vkGetPhysicalDeviceQueueFamilyProperties(physical_device, &count, queue_props.data());
-    assert(queue_props.size() == count);
-
     for (int i = 0; const auto& prop : queue_props)
     {
+        const bool supports_requested_operations = prop.queueFlags & bits;
+
         const bool supports_graphics = prop.queueFlags & VK_QUEUE_GRAPHICS_BIT;
         const bool supports_compute = prop.queueFlags & VK_QUEUE_COMPUTE_BIT;
         const bool supports_transfer = prop.queueFlags & VK_QUEUE_TRANSFER_BIT;
-        spdlog::info("Queue family {}; count: {} | GRAPHICS {:^7} | COMPUTE {:^7} | TRANSFER {:^7} | ", i, prop.queueCount, supports_graphics, supports_compute, supports_transfer);
-        i++;
 
-        if (supports_graphics)
+        spdlog::debug("Queue family {}; count: {} | GRAPHICS {:^7} | COMPUTE {:^7} | TRANSFER {:^7} | ", i, prop.queueCount, supports_graphics, supports_compute, supports_transfer);
+
+        if (supports_requested_operations)
         {
-            return true;
+            spdlog::debug("Queue family supports requested operations.");
+            return i;
         }
+
+        i++;
     }
 
-    return false;
+    return std::nullopt;
 }
 
 auto pick_physical_device(VkInstance instance)
@@ -182,15 +177,63 @@ auto pick_physical_device(VkInstance instance)
     VK_CHECK(vkEnumeratePhysicalDevices(instance, &count, physical_devices.data()));
     assert(count == physical_devices.size());
 
+    spdlog::warn("Require device with at least 1 queue in family supporting GRAPHICS, COMPUTE and TRANSFER");
+    constexpr auto required_bits = VkQueueFlagBits(VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT | VK_QUEUE_TRANSFER_BIT);
+
     for (const auto& physical_device : physical_devices)
     {
-        if (is_device_suitable(physical_device))
+        auto props = VkPhysicalDeviceProperties{};
+        vkGetPhysicalDeviceProperties(physical_device, &props);
+        spdlog::info("Checking {}", props.deviceName);
+
+        auto count = uint32_t{ 0 };
+        vkGetPhysicalDeviceQueueFamilyProperties(physical_device, &count, nullptr);
+        auto queue_family_props = std::vector<VkQueueFamilyProperties>(count);
+        vkGetPhysicalDeviceQueueFamilyProperties(physical_device, &count, queue_family_props.data());
+        assert(queue_family_props.size() == count);
+
+        // TODO this condition may be a bit too restrictive, but is sufficient for development now
+        const auto suitable_queue_family_index = pick_family_index(required_bits, queue_family_props);
+
+        if (suitable_queue_family_index.has_value()) // device is suitable
         {
-            return physical_device;
+            spdlog::info("{} is suitable with queue family index {}.", props.deviceName, suitable_queue_family_index.value());
+            return std::tuple{physical_device, suitable_queue_family_index.value()};
         }
     }
 
-    throw std::runtime_error("No suitable physical device found");
+    throw std::runtime_error("No suitable physical device found. Revisit device suitability logic");
+}
+
+auto create_logical_device(VkPhysicalDevice physical_device, uint32_t queue_family_index)
+{
+    const auto queue_prio = 1.f;
+    const auto queue_create_info = VkDeviceQueueCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .queueFamilyIndex = queue_family_index,
+        .queueCount = 1, // one queue should be sufficient for now
+        .pQueuePriorities = &queue_prio
+    };
+
+    const auto create_info = VkDeviceCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .queueCreateInfoCount = 1,
+        .pQueueCreateInfos = &queue_create_info,
+        .enabledLayerCount = 0, // deprecated + ignored
+        .ppEnabledLayerNames = nullptr, // deprecated + ignored 
+        .enabledExtensionCount = 0, // not requried atm
+        .ppEnabledExtensionNames = nullptr, // not required atm
+        .pEnabledFeatures = nullptr // not required atm
+    };
+    auto device = VkDevice{ 0 };
+
+    VK_CHECK(vkCreateDevice(physical_device, &create_info, nullptr, &device));
+
+    return device;
 }
 
 int main()
@@ -223,13 +266,15 @@ int main()
     auto debug_messenger = VkDebugUtilsMessengerEXT{ 0 };
     VK_CHECK(vkCreateDebugUtilsMessengerEXT(vk_instance, &debug_utils_messenger_create_info, nullptr, &debug_messenger));
 
-    const auto physical_device = pick_physical_device(vk_instance);
+    const auto [physical_device, queue_family_index] = pick_physical_device(vk_instance);
+    const auto logical_device = create_logical_device(physical_device, queue_family_index);
 
     while (!glfwWindowShouldClose(window))
     {
         glfwPollEvents();
     }
 
+    vkDestroyDevice(logical_device, nullptr);
     vkDestroyDebugUtilsMessengerEXT(vk_instance, debug_messenger, nullptr);
     vkDestroyInstance(vk_instance, nullptr);
 
