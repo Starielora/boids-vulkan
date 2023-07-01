@@ -17,6 +17,7 @@
 
 auto create_glfw_window()
 {
+    spdlog::trace("Create glfw window.");
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
     glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
 
@@ -89,6 +90,7 @@ static const auto debug_utils_messenger_create_info = VkDebugUtilsMessengerCreat
 
 auto create_vulkan_instance(const std::vector<const char*>& layers, const std::vector<const char*>& extensions)
 {
+    spdlog::trace("Create vulkan instance.");
     assert(layers.size() < std::numeric_limits<uint32_t>::max());
     assert(extensions.size() < std::numeric_limits<uint32_t>::max());
 
@@ -122,6 +124,7 @@ auto create_vulkan_instance(const std::vector<const char*>& layers, const std::v
 
 auto check_instance_layers(const std::vector<const char*>& requested_layers)
 {
+    spdlog::trace("Check vulkan instance layers.");
     auto instance_layer_propertes_count = uint32_t{ 0 };
     VK_CHECK(vkEnumerateInstanceLayerProperties(&instance_layer_propertes_count, nullptr));
     auto instance_layer_properties = std::vector<VkLayerProperties>(instance_layer_propertes_count);
@@ -171,6 +174,8 @@ std::optional<uint32_t> pick_family_index(VkQueueFlagBits bits, const std::vecto
 
 auto pick_physical_device(VkInstance instance)
 {
+    spdlog::trace("Picking physical device.");
+
     auto count = uint32_t{ 0 };
     VK_CHECK(vkEnumeratePhysicalDevices(instance, &count, nullptr));
     auto physical_devices = std::vector<VkPhysicalDevice>(count);
@@ -242,6 +247,7 @@ int main()
     spdlog::info("Start");
     VK_CHECK(volkInitialize());
 
+    spdlog::trace("Initialize glfw.");
     const auto glfw_initialized = glfwInit();
     assert(glfw_initialized == GLFW_TRUE);
 
@@ -269,11 +275,13 @@ int main()
     const auto [physical_device, queue_family_index] = pick_physical_device(vk_instance);
     const auto logical_device = create_logical_device(physical_device, queue_family_index);
 
+    spdlog::trace("Entering main loop.");
     while (!glfwWindowShouldClose(window))
     {
         glfwPollEvents();
     }
 
+    spdlog::trace("Cleanup.");
     vkDestroyDevice(logical_device, nullptr);
     vkDestroyDebugUtilsMessengerEXT(vk_instance, debug_messenger, nullptr);
     vkDestroyInstance(vk_instance, nullptr);
