@@ -6,6 +6,7 @@
 #include <GLFW/glfw3.h>
 
 #include <spdlog/spdlog.h>
+#include <shaders/shaders.h>
 
 #include <cassert>
 #include <vector>
@@ -13,9 +14,23 @@
 #include <optional>
 #include <set>
 #include <string_view>
+#include <fstream>
+#include <array>
 
 // TODO error message
 #define VK_CHECK(f) do { const auto result = f; if(result != VK_SUCCESS) throw std::runtime_error("");} while(0)
+
+auto read_file(const std::string_view filename)
+{
+    spdlog::debug("Reading file: {}", filename);
+    auto file = std::ifstream(filename.data(), std::ios::binary);
+    if (!file.is_open())
+    {
+        spdlog::error("Could not open file {}", filename);
+        throw std::runtime_error("");
+    }
+    return std::vector<char>(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
+}
 
 auto create_glfw_window()
 {
@@ -409,6 +424,233 @@ auto get_swapchain_images(VkDevice logical_device, VkSwapchainKHR swapchain, VkF
     return std::tuple{images, image_views};
 }
 
+VkShaderModule create_shader_module(VkDevice logical_device, const std::vector<char>& code)
+{
+    const auto create_info = VkShaderModuleCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .codeSize = code.size(),
+        .pCode = reinterpret_cast<const uint32_t*>(code.data())
+    };
+
+    auto shader_module = VkShaderModule{};
+    VK_CHECK(vkCreateShaderModule(logical_device, &create_info, nullptr, &shader_module));
+
+    return shader_module;
+}
+
+auto create_graphics_pipeline(VkDevice logical_device, VkExtent2D swapchain_extent, VkFormat swapchain_format)
+{
+    spdlog::info("Loading shaders");
+    const auto triangle_vertex_shader = create_shader_module(logical_device, read_file(shader_path::vertex::triangle));
+    const auto triangle_fragment_shader = create_shader_module(logical_device, read_file(shader_path::fragment::triangle));
+
+    const auto shader_stage_create_infos = std::array{
+        VkPipelineShaderStageCreateInfo{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .stage = VK_SHADER_STAGE_VERTEX_BIT,
+            .module = triangle_vertex_shader,
+            .pName = "main",
+            .pSpecializationInfo = nullptr
+        },
+        VkPipelineShaderStageCreateInfo{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
+            .module = triangle_fragment_shader,
+            .pName = "main",
+            .pSpecializationInfo = nullptr
+        }
+    };
+
+    const auto vertex_input_create_info = VkPipelineVertexInputStateCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .vertexBindingDescriptionCount = 0,
+        .pVertexBindingDescriptions = nullptr,
+        .vertexAttributeDescriptionCount = 0,
+        .pVertexAttributeDescriptions = nullptr
+    };
+
+    const auto input_assembly_create_info = VkPipelineInputAssemblyStateCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+        .primitiveRestartEnable = VK_FALSE
+    };
+
+    const auto viewport = VkViewport{
+        .x = 0.f,
+        .y = 0.f,
+        .width = static_cast<float>(swapchain_extent.width),
+        .height = static_cast<float>(swapchain_extent.height),
+        .minDepth = 0.f,
+        .maxDepth = 1.f
+    };
+
+    const auto scissors = VkRect2D{
+        .offset = VkOffset2D{
+            .x = 0,
+            .y = 0,
+        },
+        .extent = swapchain_extent
+    };
+
+    const auto viewport_state_create_info = VkPipelineViewportStateCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .viewportCount = 1,
+        .pViewports = &viewport,
+        .scissorCount = 1,
+        .pScissors = &scissors,
+    };
+
+    const auto rasterization_state_create_info = VkPipelineRasterizationStateCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .depthClampEnable = VK_FALSE,
+        .rasterizerDiscardEnable = VK_FALSE,
+        .polygonMode = VK_POLYGON_MODE_FILL,
+        .cullMode = VK_CULL_MODE_BACK_BIT,
+        .frontFace = VK_FRONT_FACE_CLOCKWISE,
+        .depthBiasEnable = VK_FALSE,
+        .depthBiasConstantFactor = 0.f,
+        .depthBiasClamp = 0.f,
+        .depthBiasSlopeFactor = 0.f,
+        .lineWidth = 1.f
+    };
+
+    const auto multisample_state_create_info = VkPipelineMultisampleStateCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT,
+        .sampleShadingEnable = VK_FALSE,
+        .minSampleShading = 1.f,
+        .pSampleMask = nullptr,
+        .alphaToCoverageEnable = VK_FALSE,
+        .alphaToOneEnable = VK_FALSE
+    };
+
+    const auto color_blend_attachment_state = VkPipelineColorBlendAttachmentState{
+        .blendEnable = VK_TRUE,
+        .srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA,
+        .dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+        .colorBlendOp = VK_BLEND_OP_ADD,
+        .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
+        .dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO,
+        .alphaBlendOp = VK_BLEND_OP_ADD,
+        .colorWriteMask = 0,
+    };
+
+    const auto color_blend_state_create_info = VkPipelineColorBlendStateCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .logicOpEnable = VK_FALSE,
+        .logicOp = VK_LOGIC_OP_COPY,
+        .attachmentCount = 1,
+        .pAttachments = &color_blend_attachment_state,
+        .blendConstants = {0.f, 0.f, 0.f, 0.f}
+    };
+
+    const auto pipeline_layout_create_info = VkPipelineLayoutCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .setLayoutCount = 0,
+        .pSetLayouts = nullptr,
+        .pushConstantRangeCount = 0,
+        .pPushConstantRanges = nullptr
+    };
+
+    auto pipeline_layout = VkPipelineLayout{};
+    VK_CHECK(vkCreatePipelineLayout(logical_device, &pipeline_layout_create_info, nullptr, &pipeline_layout));
+
+    const auto color_attachment = VkAttachmentDescription{
+        .flags = 0,
+        .format = swapchain_format,
+        .samples = VK_SAMPLE_COUNT_1_BIT,
+        .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+        .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+        .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+        .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+        .finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR
+    };
+
+    const auto attachmentRef = VkAttachmentReference{
+        .attachment = 0,
+        .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
+    };
+
+    const auto subpass = VkSubpassDescription{
+        .flags = 0,
+        .pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
+        .inputAttachmentCount = 0,
+        .pInputAttachments = nullptr,
+        .colorAttachmentCount = 1,
+        .pColorAttachments = &attachmentRef,
+        .pResolveAttachments = 0,
+        .pDepthStencilAttachment = nullptr,
+        .preserveAttachmentCount = 0,
+        .pPreserveAttachments = nullptr
+    };
+
+    const auto render_pass_create_info = VkRenderPassCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .attachmentCount = 1,
+        .pAttachments = &color_attachment,
+        .subpassCount = 1,
+        .pSubpasses = &subpass,
+        .dependencyCount = 0,
+        .pDependencies = nullptr
+    };
+
+    auto render_pass = VkRenderPass{};
+    VK_CHECK(vkCreateRenderPass(logical_device, &render_pass_create_info, nullptr, &render_pass));
+
+    const auto pipeline_create_info = VkGraphicsPipelineCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .stageCount = shader_stage_create_infos.size(),
+        .pStages = shader_stage_create_infos.data(),
+        .pVertexInputState = &vertex_input_create_info,
+        .pInputAssemblyState = &input_assembly_create_info,
+        .pTessellationState = nullptr,
+        .pViewportState = &viewport_state_create_info,
+        .pRasterizationState = &rasterization_state_create_info,
+        .pMultisampleState = &multisample_state_create_info,
+        .pDepthStencilState = nullptr,
+        .pColorBlendState = &color_blend_state_create_info,
+        .pDynamicState = nullptr,
+        .layout = pipeline_layout,
+        .renderPass = render_pass,
+        .subpass = 0,
+        .basePipelineHandle = VK_NULL_HANDLE,
+        .basePipelineIndex = 0
+    };
+
+    auto pipeline = VkPipeline{ 0 };
+    vkCreateGraphicsPipelines(logical_device, VK_NULL_HANDLE, 1, &pipeline_create_info, nullptr, &pipeline);
+
+    vkDestroyShaderModule(logical_device, triangle_vertex_shader, nullptr);
+    vkDestroyShaderModule(logical_device, triangle_fragment_shader, nullptr);
+
+    return std::tuple{pipeline, pipeline_layout, render_pass};
+}
+
 int main()
 {
     spdlog::set_level(spdlog::level::trace);
@@ -454,8 +696,11 @@ int main()
 
     int glfw_fb_extent_width, glfw_fb_extent_height;
     glfwGetFramebufferSize(window, &glfw_fb_extent_width, &glfw_fb_extent_height);
-    const auto [swapchain, surface_format] = create_swapchain(logical_device, physical_device, surface, queue_family_index, {static_cast<uint32_t>(glfw_fb_extent_width), static_cast<uint32_t>(glfw_fb_extent_height)});
+    const auto glfw_extent = VkExtent2D{ static_cast<uint32_t>(glfw_fb_extent_width), static_cast<uint32_t>(glfw_fb_extent_height) };
+    const auto [swapchain, surface_format] = create_swapchain(logical_device, physical_device, surface, queue_family_index, glfw_extent);
     const auto [swapchain_images, swapchain_image_views] = get_swapchain_images(logical_device, swapchain, surface_format.format);
+
+    const auto [pipeline, pipeline_layout, render_pass] = create_graphics_pipeline(logical_device, glfw_extent, surface_format.format);
 
     spdlog::trace("Entering main loop.");
     while (!glfwWindowShouldClose(window))
@@ -468,6 +713,10 @@ int main()
     {
         vkDestroyImageView(logical_device, iv, nullptr);
     }
+
+    vkDestroyPipelineLayout(logical_device, pipeline_layout, nullptr);
+    vkDestroyPipeline(logical_device, pipeline, nullptr);
+    vkDestroyRenderPass(logical_device, render_pass, nullptr);
     vkDestroySwapchainKHR(logical_device, swapchain, nullptr);
     vkDestroySurfaceKHR(vk_instance, surface, nullptr);
     vkDestroyDevice(logical_device, nullptr);
