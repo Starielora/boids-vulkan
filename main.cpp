@@ -321,7 +321,7 @@ VkSurfaceFormatKHR choose_image_format(const std::vector<VkSurfaceFormatKHR>& av
 {
     for (const auto& format : available_formats)
     {
-        if (format.format == VK_FORMAT_B8G8R8A8_SRGB && format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR)
+        if (format.format == VK_FORMAT_B8G8R8A8_UNORM && format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR)
         {
             return format;
         }
@@ -548,7 +548,7 @@ auto create_graphics_pipeline(VkDevice logical_device, VkExtent2D swapchain_exte
         .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
         .dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO,
         .alphaBlendOp = VK_BLEND_OP_ADD,
-        .colorWriteMask = 0,
+        .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT
     };
 
     const auto color_blend_state_create_info = VkPipelineColorBlendStateCreateInfo{
@@ -605,6 +605,16 @@ auto create_graphics_pipeline(VkDevice logical_device, VkExtent2D swapchain_exte
         .pPreserveAttachments = nullptr
     };
 
+    const auto subpass_dependency = VkSubpassDependency{
+        .srcSubpass = VK_SUBPASS_EXTERNAL,
+        .dstSubpass = 0,
+        .srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+        .dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+        .srcAccessMask = 0,
+        .dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+        .dependencyFlags = 0
+    };
+
     const auto render_pass_create_info = VkRenderPassCreateInfo{
         .sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
         .pNext = nullptr,
@@ -613,8 +623,8 @@ auto create_graphics_pipeline(VkDevice logical_device, VkExtent2D swapchain_exte
         .pAttachments = &color_attachment,
         .subpassCount = 1,
         .pSubpasses = &subpass,
-        .dependencyCount = 0,
-        .pDependencies = nullptr
+        .dependencyCount = 1,
+        .pDependencies = &subpass_dependency
     };
 
     auto render_pass = VkRenderPass{};
@@ -649,6 +659,89 @@ auto create_graphics_pipeline(VkDevice logical_device, VkExtent2D swapchain_exte
     vkDestroyShaderModule(logical_device, triangle_fragment_shader, nullptr);
 
     return std::tuple{pipeline, pipeline_layout, render_pass};
+}
+
+auto create_swapchain_framebuffers(VkDevice logical_device, VkRenderPass render_pass, const std::vector<VkImageView> swapchain_imageviews, VkExtent2D swapchain_extent)
+{
+    auto framebuffers = std::vector<VkFramebuffer>(swapchain_imageviews.size());
+
+    for (int i = 0; const auto& image_view : swapchain_imageviews)
+    {
+        const auto create_info = VkFramebufferCreateInfo{
+            .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .renderPass = render_pass,
+            .attachmentCount = 1,
+            .pAttachments = &image_view,
+            .width = swapchain_extent.width,
+            .height = swapchain_extent.height,
+            .layers = 1
+        };
+
+        VK_CHECK(vkCreateFramebuffer(logical_device, &create_info, nullptr, &framebuffers[i]));
+    }
+
+    return framebuffers;
+}
+
+auto create_command_pool(VkDevice logical_device, uint32_t queue_family_index)
+{
+    const auto create_info = VkCommandPoolCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
+        .queueFamilyIndex = queue_family_index
+    };
+
+    auto command_pool = VkCommandPool{};
+    VK_CHECK(vkCreateCommandPool(logical_device, &create_info, nullptr, &command_pool));
+
+    return command_pool;
+}
+
+auto create_command_buffer(VkDevice logical_device, VkCommandPool command_pool)
+{
+    const auto& allocate_info = VkCommandBufferAllocateInfo{
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+        .pNext = nullptr,
+        .commandPool = command_pool,
+        .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+        .commandBufferCount = 1
+    };
+
+    auto command_buffer = VkCommandBuffer{};
+    VK_CHECK(vkAllocateCommandBuffers(logical_device, &allocate_info, &command_buffer));
+
+    return command_buffer;
+}
+
+auto create_semaphore(VkDevice logical_device)
+{
+    const auto create_info = VkSemaphoreCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0
+    };
+
+    auto semaphore = VkSemaphore{};
+    VK_CHECK(vkCreateSemaphore(logical_device, &create_info, nullptr, &semaphore));
+
+    return semaphore;
+}
+
+auto create_fence(VkDevice logical_device)
+{
+    const auto create_info = VkFenceCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = VK_FENCE_CREATE_SIGNALED_BIT
+    };
+
+    auto fence = VkFence{};
+    VK_CHECK(vkCreateFence(logical_device, &create_info, nullptr, &fence));
+
+    return fence;
 }
 
 int main()
@@ -701,19 +794,109 @@ int main()
     const auto [swapchain_images, swapchain_image_views] = get_swapchain_images(logical_device, swapchain, surface_format.format);
 
     const auto [pipeline, pipeline_layout, render_pass] = create_graphics_pipeline(logical_device, glfw_extent, surface_format.format);
+    const auto swapchain_framebuffers = create_swapchain_framebuffers(logical_device, render_pass, swapchain_image_views, glfw_extent);
+    const auto command_pool = create_command_pool(logical_device, queue_family_index);
+    const auto command_buffer = create_command_buffer(logical_device, command_pool);
+
+    const auto image_available_semaphore = create_semaphore(logical_device);
+    const auto rendering_finished_semaphore = create_semaphore(logical_device);
+    const auto in_flight_fence = create_fence(logical_device);
 
     spdlog::trace("Entering main loop.");
+    auto image_index = uint32_t{ 0 };
     while (!glfwWindowShouldClose(window))
     {
         glfwPollEvents();
+
+        VK_CHECK(vkWaitForFences(logical_device, 1, &in_flight_fence, VK_TRUE, UINT64_MAX));
+        VK_CHECK(vkResetFences(logical_device, 1, &in_flight_fence));
+
+        VK_CHECK(vkAcquireNextImageKHR(logical_device, swapchain, UINT64_MAX, image_available_semaphore, VK_NULL_HANDLE, &image_index));
+
+        const auto begin_info = VkCommandBufferBeginInfo{
+            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+            .pNext = nullptr,
+            .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+            .pInheritanceInfo = nullptr
+        };
+
+        VK_CHECK(vkResetCommandBuffer(command_buffer, 0));
+        VK_CHECK(vkBeginCommandBuffer(command_buffer, &begin_info));
+
+        const auto clear_color = VkClearValue{
+            .color = VkClearColorValue{
+                .float32 = {130.f / 255.f, 163.f / 255.f, 255.f / 255.f}
+            }
+        };
+        
+        const auto render_pass_begin_info = VkRenderPassBeginInfo{
+            .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+            .pNext = nullptr,
+            .renderPass = render_pass,
+            .framebuffer = swapchain_framebuffers[image_index],
+            .renderArea = VkRect2D {
+                .offset = VkOffset2D { 0, 0 },
+                .extent = glfw_extent
+            },
+            .clearValueCount = 1,
+            .pClearValues = &clear_color
+        };
+
+        vkCmdBeginRenderPass(command_buffer, &render_pass_begin_info, VK_SUBPASS_CONTENTS_INLINE);
+
+        vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+        vkCmdDraw(command_buffer, 3, 1, 0, 0);
+
+        const auto wait_semaphores = std::array{image_available_semaphore};
+        const auto wait_stages = VkPipelineStageFlags{VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
+        const auto signal_semaphores = std::array{rendering_finished_semaphore};
+
+        const auto submit_info = VkSubmitInfo{
+            .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+            .pNext = nullptr,
+            .waitSemaphoreCount = 1,
+            .pWaitSemaphores = wait_semaphores.data(),
+            .pWaitDstStageMask = &wait_stages,
+            .commandBufferCount = 1,
+            .pCommandBuffers = &command_buffer,
+            .signalSemaphoreCount = 1,
+            .pSignalSemaphores = signal_semaphores.data(),
+        };
+
+        vkCmdEndRenderPass(command_buffer);
+        VK_CHECK(vkEndCommandBuffer(command_buffer));
+
+        VK_CHECK(vkQueueSubmit(present_queue, 1, &submit_info, in_flight_fence));
+
+        const auto present_info = VkPresentInfoKHR{
+            .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+            .pNext = nullptr,
+            .waitSemaphoreCount = 1,
+            .pWaitSemaphores = signal_semaphores.data(),
+            .swapchainCount = 1,
+            .pSwapchains = &swapchain,
+            .pImageIndices = &image_index,
+            .pResults = nullptr,
+        };
+
+        VK_CHECK(vkQueuePresentKHR(present_queue, &present_info));
     }
 
+    VK_CHECK(vkDeviceWaitIdle(logical_device));
+
     spdlog::trace("Cleanup.");
+    vkDestroyFence(logical_device, in_flight_fence, nullptr);
+    vkDestroySemaphore(logical_device, rendering_finished_semaphore, nullptr);
+    vkDestroySemaphore(logical_device, image_available_semaphore, nullptr);
+    vkDestroyCommandPool(logical_device, command_pool, nullptr);
+    for (const auto& fb : swapchain_framebuffers)
+    {
+        vkDestroyFramebuffer(logical_device, fb, nullptr);
+    }
     for (const auto iv : swapchain_image_views)
     {
         vkDestroyImageView(logical_device, iv, nullptr);
     }
-
     vkDestroyPipelineLayout(logical_device, pipeline_layout, nullptr);
     vkDestroyPipeline(logical_device, pipeline, nullptr);
     vkDestroyRenderPass(logical_device, render_pass, nullptr);
