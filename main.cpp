@@ -700,48 +700,63 @@ auto create_command_pool(VkDevice logical_device, uint32_t queue_family_index)
     return command_pool;
 }
 
-auto create_command_buffer(VkDevice logical_device, VkCommandPool command_pool)
+auto create_command_buffers(VkDevice logical_device, VkCommandPool command_pool, uint32_t count)
 {
+    auto command_buffers = std::vector<VkCommandBuffer>(count);
+
     const auto& allocate_info = VkCommandBufferAllocateInfo{
         .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
         .pNext = nullptr,
         .commandPool = command_pool,
         .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-        .commandBufferCount = 1
+        .commandBufferCount = static_cast<uint32_t>(command_buffers.size())
     };
 
-    auto command_buffer = VkCommandBuffer{};
-    VK_CHECK(vkAllocateCommandBuffers(logical_device, &allocate_info, &command_buffer));
+    VK_CHECK(vkAllocateCommandBuffers(logical_device, &allocate_info, command_buffers.data()));
 
-    return command_buffer;
+    return command_buffers;
 }
 
-auto create_semaphore(VkDevice logical_device)
+auto create_semaphores(VkDevice logical_device, uint32_t count)
 {
-    const auto create_info = VkSemaphoreCreateInfo{
-        .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
-        .pNext = nullptr,
-        .flags = 0
-    };
+    auto semaphores = std::vector<VkSemaphore>(count);
 
-    auto semaphore = VkSemaphore{};
-    VK_CHECK(vkCreateSemaphore(logical_device, &create_info, nullptr, &semaphore));
+    for (uint32_t i = 0; i < count; ++i)
+    {
+        const auto create_info = VkSemaphoreCreateInfo{
+            .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0
+        };
 
-    return semaphore;
+        auto semaphore = VkSemaphore{};
+        VK_CHECK(vkCreateSemaphore(logical_device, &create_info, nullptr, &semaphore));
+
+        semaphores[i] = semaphore;
+    }
+
+    return semaphores;
 }
 
-auto create_fence(VkDevice logical_device)
+auto create_fences(VkDevice logical_device, uint32_t count)
 {
-    const auto create_info = VkFenceCreateInfo{
-        .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
-        .pNext = nullptr,
-        .flags = VK_FENCE_CREATE_SIGNALED_BIT
-    };
+    auto fences = std::vector<VkFence>(count);
 
-    auto fence = VkFence{};
-    VK_CHECK(vkCreateFence(logical_device, &create_info, nullptr, &fence));
+    for (uint32_t i = 0; i < count; ++i)
+    {
+        const auto create_info = VkFenceCreateInfo{
+            .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = VK_FENCE_CREATE_SIGNALED_BIT
+        };
 
-    return fence;
+        auto fence = VkFence{};
+        VK_CHECK(vkCreateFence(logical_device, &create_info, nullptr, &fence));
+
+        fences[i] = fence;
+    }
+
+    return fences;
 }
 
 int main()
@@ -796,16 +811,25 @@ int main()
     const auto [pipeline, pipeline_layout, render_pass] = create_graphics_pipeline(logical_device, glfw_extent, surface_format.format);
     const auto swapchain_framebuffers = create_swapchain_framebuffers(logical_device, render_pass, swapchain_image_views, glfw_extent);
     const auto command_pool = create_command_pool(logical_device, queue_family_index);
-    const auto command_buffer = create_command_buffer(logical_device, command_pool);
 
-    const auto image_available_semaphore = create_semaphore(logical_device);
-    const auto rendering_finished_semaphore = create_semaphore(logical_device);
-    const auto in_flight_fence = create_fence(logical_device);
+    constexpr auto max_frames_in_flight = 2;
+    const auto command_buffers = create_command_buffers(logical_device, command_pool, max_frames_in_flight);
+
+    const auto image_available_semaphores = create_semaphores(logical_device, max_frames_in_flight);
+    const auto rendering_finished_semaphores = create_semaphores(logical_device, max_frames_in_flight);
+    const auto in_flight_fences = create_fences(logical_device, max_frames_in_flight);
 
     spdlog::trace("Entering main loop.");
+    auto current_frame = uint32_t{ 0 };
     auto image_index = uint32_t{ 0 };
     while (!glfwWindowShouldClose(window))
     {
+        spdlog::info("frame: {}", current_frame);
+        const auto in_flight_fence = in_flight_fences[current_frame];
+        const auto image_available_semaphore = image_available_semaphores[current_frame];
+        const auto rendering_finished_semaphore = rendering_finished_semaphores[current_frame];
+        const auto command_buffer = command_buffers[current_frame];
+
         glfwPollEvents();
 
         VK_CHECK(vkWaitForFences(logical_device, 1, &in_flight_fence, VK_TRUE, UINT64_MAX));
@@ -880,14 +904,25 @@ int main()
         };
 
         VK_CHECK(vkQueuePresentKHR(present_queue, &present_info));
+
+        current_frame = (current_frame + 1) % max_frames_in_flight;
     }
 
     VK_CHECK(vkDeviceWaitIdle(logical_device));
 
     spdlog::trace("Cleanup.");
-    vkDestroyFence(logical_device, in_flight_fence, nullptr);
-    vkDestroySemaphore(logical_device, rendering_finished_semaphore, nullptr);
-    vkDestroySemaphore(logical_device, image_available_semaphore, nullptr);
+    for (const auto fence : in_flight_fences)
+    {
+        vkDestroyFence(logical_device, fence, nullptr);
+    }
+    for (const auto sem : rendering_finished_semaphores)
+    {
+        vkDestroySemaphore(logical_device, sem, nullptr);
+    }
+    for (const auto sem : image_available_semaphores)
+    {
+        vkDestroySemaphore(logical_device, sem, nullptr);
+    }
     vkDestroyCommandPool(logical_device, command_pool, nullptr);
     for (const auto& fb : swapchain_framebuffers)
     {
