@@ -826,6 +826,14 @@ auto recreate_swapchain(GLFWwindow* window, VkDevice logical_device, VkPhysicalD
     return std::tuple{glfw_extent, swapchain, surface_format, swapchain_images, swapchain_image_views, render_pass, swapchain_framebuffers};
 }
 
+void handle_keyboard(GLFWwindow* window)
+{
+    if (glfwGetKey(window, GLFW_KEY_ESCAPE))
+    {
+        glfwSetWindowShouldClose(window, true);
+    }
+}
+
 int main()
 {
     spdlog::set_level(spdlog::level::trace);
@@ -891,6 +899,8 @@ int main()
     auto image_index = uint32_t{ 0 };
     while (!glfwWindowShouldClose(window))
     {
+        handle_keyboard(window);
+
         const auto in_flight_fence = in_flight_fences[current_frame];
         const auto image_available_semaphore = image_available_semaphores[current_frame];
         const auto rendering_finished_semaphore = rendering_finished_semaphores[current_frame];
