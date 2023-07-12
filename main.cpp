@@ -5,6 +5,8 @@
 #include <Volk/volk.h>
 #include <GLFW/glfw3.h>
 
+#include <glm/glm.hpp>
+
 #include <spdlog/spdlog.h>
 #include <shaders/shaders.h>
 
@@ -467,14 +469,35 @@ auto create_graphics_pipeline(VkDevice logical_device, VkExtent2D swapchain_exte
         }
     };
 
+    const auto bindingDescription = VkVertexInputBindingDescription{
+        .binding = 0,
+        .stride = 2 * sizeof(glm::vec3),
+        .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
+    };
+
+    const auto vertexAttributeDescriptions = std::array{
+        VkVertexInputAttributeDescription{
+            .location = 0,
+                .binding = 0,
+                .format = VK_FORMAT_R32G32B32_SFLOAT,
+                .offset = 0
+        },
+        VkVertexInputAttributeDescription{
+            .location = 1,
+            .binding = 0,
+            .format = VK_FORMAT_R32G32B32_SFLOAT,
+            .offset = sizeof glm::vec3
+        },
+    };
+
     const auto vertex_input_create_info = VkPipelineVertexInputStateCreateInfo{
         .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
         .pNext = nullptr,
         .flags = 0,
-        .vertexBindingDescriptionCount = 0,
-        .pVertexBindingDescriptions = nullptr,
-        .vertexAttributeDescriptionCount = 0,
-        .pVertexAttributeDescriptions = nullptr
+        .vertexBindingDescriptionCount = 1,
+        .pVertexBindingDescriptions = &bindingDescription,
+        .vertexAttributeDescriptionCount = vertexAttributeDescriptions.size(),
+        .pVertexAttributeDescriptions = vertexAttributeDescriptions.data()
     };
 
     const auto input_assembly_create_info = VkPipelineInputAssemblyStateCreateInfo{
@@ -834,8 +857,88 @@ void handle_keyboard(GLFWwindow* window)
     }
 }
 
+auto create_buffer(VkDevice logical_device, uint32_t queue_family_index, std::size_t size)
+{
+    const auto create_info = VkBufferCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .size = size,
+        .usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+        .queueFamilyIndexCount = 1,
+        .pQueueFamilyIndices = &queue_family_index
+    };
+
+    auto buffer = VkBuffer{};
+    VK_CHECK(vkCreateBuffer(logical_device, &create_info, nullptr, &buffer));
+
+    auto memory_requirements = VkMemoryRequirements{};
+    vkGetBufferMemoryRequirements(logical_device, buffer, &memory_requirements);
+
+    return std::tuple{buffer, memory_requirements};
+}
+
+auto find_memory_type_index(VkPhysicalDevice physical_device, uint32_t memory_type_requirements, VkMemoryPropertyFlags memory_property_flags)
+{
+    auto memory_properties = VkPhysicalDeviceMemoryProperties{};
+
+    vkGetPhysicalDeviceMemoryProperties(physical_device, &memory_properties);
+
+    for (uint32_t i = 0; i < memory_properties.memoryTypeCount; ++i)
+    {
+        const auto& memory_type = memory_properties.memoryTypes[i];
+
+        if ( (memory_type_requirements & (1 << i)) && (memory_type.propertyFlags & memory_property_flags) == memory_property_flags)
+        {
+            return i;
+        }
+    }
+
+    throw std::runtime_error("");
+}
+
+auto allocate_buffer(VkDevice logical_device, std::size_t size, uint32_t memory_type_index)
+{
+    const auto allocate_info = VkMemoryAllocateInfo{
+        .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+        .pNext = nullptr,
+        .allocationSize = size,
+        .memoryTypeIndex = memory_type_index
+    };
+
+    auto memory = VkDeviceMemory{};
+    vkAllocateMemory(logical_device, &allocate_info, nullptr, &memory);
+
+    return memory;
+}
+
+auto map_memory(VkDevice logical_device, VkDeviceMemory device_memory, const void* in_data, std::size_t size)
+{
+    void* pData;
+    VK_CHECK(vkMapMemory(logical_device, device_memory, 0, size, 0, &pData));
+
+    std::memcpy(pData, in_data, size);
+
+    vkUnmapMemory(logical_device, device_memory);
+}
+
 int main()
 {
+    struct Vertex
+    {
+        glm::vec3 pos;
+        glm::vec3 color;
+    };
+
+    auto triangle_vertex_buffer = std::vector<Vertex>{
+        Vertex{ glm::vec3{ 0.f, -0.5f, 0.f }, glm::vec3{ 1.f, 0.f, 0.f } },
+        Vertex{ glm::vec3{ 0.5, 0.5, 0.f }, glm::vec3{ 0.f, 1.f, 0.f } },
+        Vertex{ glm::vec3{ -0.5, 0.5, 0.f }, glm::vec3{ 0.f, 0.f, 1.f } }
+    };
+
+    const auto triangle_vertex_buffer_size = triangle_vertex_buffer.size() * sizeof(Vertex);
+
     spdlog::set_level(spdlog::level::trace);
     spdlog::info("Start");
     VK_CHECK(volkInitialize());
@@ -889,6 +992,12 @@ int main()
 
     constexpr auto max_frames_in_flight = 2;
     const auto command_buffers = create_command_buffers(logical_device, command_pool, max_frames_in_flight);
+
+    const auto& [vertex_buffer, vertex_buffer_memory_requirements] = create_buffer(logical_device, queue_family_index, triangle_vertex_buffer_size);
+    const auto memory_type_index = find_memory_type_index(physical_device, vertex_buffer_memory_requirements.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    const auto device_memory = allocate_buffer(logical_device, triangle_vertex_buffer_size, memory_type_index);
+    VK_CHECK(vkBindBufferMemory(logical_device, vertex_buffer, device_memory, 0));
+    map_memory(logical_device, device_memory, triangle_vertex_buffer.data(), triangle_vertex_buffer_size);
 
     const auto image_available_semaphores = create_semaphores(logical_device, max_frames_in_flight);
     const auto rendering_finished_semaphores = create_semaphores(logical_device, max_frames_in_flight);
@@ -988,6 +1097,8 @@ int main()
         vkCmdSetScissor(command_buffer, 0, 1, &scissors);
 
         vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+        const auto offsets = std::array<VkDeviceSize, 1>{ 0 };
+        vkCmdBindVertexBuffers(command_buffer, 0, 1, &vertex_buffer, offsets.data());
         vkCmdDraw(command_buffer, 3, 1, 0, 0);
 
         const auto wait_semaphores = std::array{image_available_semaphore};
@@ -1030,6 +1141,8 @@ int main()
     VK_CHECK(vkDeviceWaitIdle(logical_device));
 
     spdlog::trace("Cleanup.");
+    vkFreeMemory(logical_device, device_memory, nullptr);
+    vkDestroyBuffer(logical_device, vertex_buffer, nullptr);
     for (const auto fence : in_flight_fences)
     {
         vkDestroyFence(logical_device, fence, nullptr);
