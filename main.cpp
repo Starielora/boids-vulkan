@@ -857,14 +857,14 @@ void handle_keyboard(GLFWwindow* window)
     }
 }
 
-auto create_buffer(VkDevice logical_device, uint32_t queue_family_index, std::size_t size)
+auto create_buffer(VkDevice logical_device, uint32_t queue_family_index, std::size_t size, VkBufferUsageFlags usage)
 {
     const auto create_info = VkBufferCreateInfo{
         .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
         .pNext = nullptr,
         .flags = 0,
         .size = size,
-        .usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+        .usage = usage,
         .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
         .queueFamilyIndexCount = 1,
         .pQueueFamilyIndices = &queue_family_index
@@ -913,10 +913,10 @@ auto allocate_buffer(VkDevice logical_device, std::size_t size, uint32_t memory_
     return memory;
 }
 
-auto map_memory(VkDevice logical_device, VkDeviceMemory device_memory, const void* in_data, std::size_t size)
+auto map_memory(VkDevice logical_device, VkDeviceMemory device_memory, uint32_t offset, const void* in_data, std::size_t size)
 {
     void* pData;
-    VK_CHECK(vkMapMemory(logical_device, device_memory, 0, size, 0, &pData));
+    VK_CHECK(vkMapMemory(logical_device, device_memory, offset, size, 0, &pData));
 
     std::memcpy(pData, in_data, size);
 
@@ -932,12 +932,18 @@ int main()
     };
 
     auto triangle_vertex_buffer = std::vector<Vertex>{
-        Vertex{ glm::vec3{ 0.f, -0.5f, 0.f }, glm::vec3{ 1.f, 0.f, 0.f } },
-        Vertex{ glm::vec3{ 0.5, 0.5, 0.f }, glm::vec3{ 0.f, 1.f, 0.f } },
-        Vertex{ glm::vec3{ -0.5, 0.5, 0.f }, glm::vec3{ 0.f, 0.f, 1.f } }
+        { glm::vec3{ -0.5f, 0.5f, 0.f }, glm::vec3{ 1.f, 0.f, 0.f } },
+        { glm::vec3{ -0.5, -0.5, 0.f }, glm::vec3{ 0.f, 1.f, 0.f } },
+        { glm::vec3{ 0.5, 0.5, 0.f }, glm::vec3{ 0.f, 0.f, 1.f } },
+        { glm::vec3{ 0.5, -0.5, 0.f }, glm::vec3{ 1.f, 1.f, 1.f }}
+    };
+
+    auto triangle_index_buffer = std::vector<uint16_t>{
+        0, 1, 2, 1, 3, 2
     };
 
     const auto triangle_vertex_buffer_size = triangle_vertex_buffer.size() * sizeof(Vertex);
+    const auto triangle_index_buffer_size = triangle_index_buffer.size() * sizeof(decltype(triangle_index_buffer)::value_type);
 
     spdlog::set_level(spdlog::level::trace);
     spdlog::info("Start");
@@ -993,11 +999,12 @@ int main()
     constexpr auto max_frames_in_flight = 2;
     const auto command_buffers = create_command_buffers(logical_device, command_pool, max_frames_in_flight);
 
-    const auto& [vertex_buffer, vertex_buffer_memory_requirements] = create_buffer(logical_device, queue_family_index, triangle_vertex_buffer_size);
-    const auto memory_type_index = find_memory_type_index(physical_device, vertex_buffer_memory_requirements.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-    const auto device_memory = allocate_buffer(logical_device, triangle_vertex_buffer_size, memory_type_index);
+    const auto& [vertex_buffer, vertex_buffer_memory_requirements] = create_buffer(logical_device, queue_family_index, triangle_vertex_buffer_size + triangle_index_buffer_size, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
+    const auto vertex_memory_type_index = find_memory_type_index(physical_device, vertex_buffer_memory_requirements.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    const auto device_memory = allocate_buffer(logical_device, triangle_vertex_buffer_size + triangle_index_buffer_size, vertex_memory_type_index);
     VK_CHECK(vkBindBufferMemory(logical_device, vertex_buffer, device_memory, 0));
-    map_memory(logical_device, device_memory, triangle_vertex_buffer.data(), triangle_vertex_buffer_size);
+    map_memory(logical_device, device_memory, 0, triangle_vertex_buffer.data(), triangle_vertex_buffer_size);
+    map_memory(logical_device, device_memory, triangle_vertex_buffer_size, triangle_index_buffer.data(), triangle_index_buffer_size);
 
     const auto image_available_semaphores = create_semaphores(logical_device, max_frames_in_flight);
     const auto rendering_finished_semaphores = create_semaphores(logical_device, max_frames_in_flight);
@@ -1099,7 +1106,8 @@ int main()
         vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
         const auto offsets = std::array<VkDeviceSize, 1>{ 0 };
         vkCmdBindVertexBuffers(command_buffer, 0, 1, &vertex_buffer, offsets.data());
-        vkCmdDraw(command_buffer, 3, 1, 0, 0);
+        vkCmdBindIndexBuffer(command_buffer, vertex_buffer, triangle_vertex_buffer_size, VK_INDEX_TYPE_UINT16);
+        vkCmdDrawIndexed(command_buffer, triangle_index_buffer.size(), 1, 0, 0, 0);
 
         const auto wait_semaphores = std::array{image_available_semaphore};
         const auto wait_stages = VkPipelineStageFlags{VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
