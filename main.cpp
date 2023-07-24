@@ -252,7 +252,7 @@ auto pick_physical_device(VkInstance instance, VkSurfaceKHR surface, const std::
             {
                 spdlog::debug("Queue family {} supports presentation to surface.", suitable_queue_family_index.value());
                 spdlog::info("Picking {} physical device.", props.deviceName);
-                return std::tuple{physical_device, suitable_queue_family_index.value()};
+                return std::tuple{physical_device, suitable_queue_family_index.value(), props};
             }
         }
     }
@@ -1026,12 +1026,12 @@ auto allocate_descriptor_sets(VkDevice logical_device, const VkDescriptorSetLayo
     return sets;
 }
 
-auto update_descriptor_set(VkDevice logical_device, VkDescriptorSet descriptor_set, VkBuffer buffer)
+auto update_descriptor_set(VkDevice logical_device, VkDescriptorSet descriptor_set, VkBuffer buffer, uint32_t offset, uint32_t size)
 {
     const auto buffer_info = VkDescriptorBufferInfo{
         .buffer = buffer,
-        .offset = 0,
-        .range = VK_WHOLE_SIZE
+        .offset = offset,
+        .range = size
     };
 
     const auto descriptor_write = VkWriteDescriptorSet{
@@ -1048,6 +1048,18 @@ auto update_descriptor_set(VkDevice logical_device, VkDescriptorSet descriptor_s
     };
 
     vkUpdateDescriptorSets(logical_device, 1, &descriptor_write, 0, nullptr);
+}
+
+auto pad_uniform_buffer_size(std::size_t original_size, std::size_t min_uniform_buffer_alignment)
+{
+    std::size_t aligned_size = original_size;
+
+    if (min_uniform_buffer_alignment > 0)
+    {
+        aligned_size = (aligned_size + min_uniform_buffer_alignment - 1) & ~(min_uniform_buffer_alignment - 1);
+    }
+
+    return aligned_size;
 }
 
 int main()
@@ -1117,7 +1129,7 @@ int main()
     auto debug_messenger = VkDebugUtilsMessengerEXT{ 0 };
     VK_CHECK(vkCreateDebugUtilsMessengerEXT(vk_instance, &debug_utils_messenger_create_info, nullptr, &debug_messenger));
 
-    const auto [physical_device, queue_family_index] = pick_physical_device(vk_instance, surface, required_device_extensions);
+    const auto [physical_device, queue_family_index, physical_device_properties] = pick_physical_device(vk_instance, surface, required_device_extensions);
     const auto logical_device = create_logical_device(physical_device, queue_family_index, required_device_extensions);
 
     auto present_queue = VkQueue{ 0 };
@@ -1135,20 +1147,16 @@ int main()
 
     constexpr auto max_frames_in_flight = 2;
 
+    const auto camera_data_padded_size = pad_uniform_buffer_size(sizeof(camera_data), physical_device_properties.limits.minUniformBufferOffsetAlignment);
     const auto descriptor_pool = create_descriptor_pool(logical_device);
     const auto descriptor_sets = allocate_descriptor_sets(logical_device, camera_data_descriptor_set_layout, descriptor_pool, max_frames_in_flight);
-    const auto camera_data_buffers = create_buffers(logical_device, sizeof(camera_data), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, max_frames_in_flight);
-    auto camera_data_memory_ptrs = std::vector<void*>(max_frames_in_flight);
-    auto camera_data_memory = std::vector<VkDeviceMemory>(max_frames_in_flight);
+    const auto [camera_data_buffer, camera_data_buffer_memory_requirements] = create_buffer(logical_device, max_frames_in_flight * camera_data_padded_size, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
+    void* camera_data_memory_ptr = nullptr;
 
-    for (std::size_t i = 0; const auto& [buffer, memory_requirements] : camera_data_buffers)
-    {
-        const auto camera_data_memory_type_index = find_memory_type_index(physical_device, memory_requirements.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-        camera_data_memory[i] = allocate_buffer(logical_device, sizeof(camera_data), camera_data_memory_type_index);
-        VK_CHECK(vkBindBufferMemory(logical_device, buffer, camera_data_memory[i], 0));
-        VK_CHECK(vkMapMemory(logical_device, camera_data_memory[i], 0, VK_WHOLE_SIZE, 0, &camera_data_memory_ptrs[i]));
-        i++;
-    }
+    const auto camera_data_memory_type_index = find_memory_type_index(physical_device, camera_data_buffer_memory_requirements.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    const auto camera_data_memory = allocate_buffer(logical_device, max_frames_in_flight * camera_data_padded_size, camera_data_memory_type_index);
+    VK_CHECK(vkBindBufferMemory(logical_device, camera_data_buffer, camera_data_memory, 0));
+    VK_CHECK(vkMapMemory(logical_device, camera_data_memory, 0, VK_WHOLE_SIZE, 0, &camera_data_memory_ptr));
 
     auto swapchain_framebuffers = create_swapchain_framebuffers(logical_device, render_pass, swapchain_image_views, glfw_extent);
     const auto command_pool = create_command_pool(logical_device, queue_family_index);
@@ -1240,8 +1248,8 @@ int main()
         cam_data.proj = camera.projection(glfw_extent.width, glfw_extent.height);
         cam_data.view = camera.view();
         cam_data.viewproj = camera.projection(glfw_extent.width, glfw_extent.height) * camera.view() ;
-        std::memcpy(camera_data_memory_ptrs[current_frame], &cam_data, sizeof(cam_data));
-        update_descriptor_set(logical_device, descriptor_sets[current_frame], std::get<0>(camera_data_buffers[current_frame]));
+        std::memcpy(reinterpret_cast<char*>(camera_data_memory_ptr) + current_frame * camera_data_padded_size, &cam_data, sizeof(cam_data));
+        update_descriptor_set(logical_device, descriptor_sets[current_frame], camera_data_buffer, current_frame * camera_data_padded_size, camera_data_padded_size);
 
         vkCmdBeginRenderPass(command_buffer, &render_pass_begin_info, VK_SUBPASS_CONTENTS_INLINE);
 
@@ -1315,14 +1323,8 @@ int main()
 
     vkDestroyDescriptorPool(logical_device, descriptor_pool, nullptr);
     vkDestroyDescriptorSetLayout(logical_device, camera_data_descriptor_set_layout, nullptr);
-    for (const auto [buffer, _] : camera_data_buffers)
-    {
-        vkDestroyBuffer(logical_device, buffer, nullptr);
-    }
-    for (const auto mem : camera_data_memory)
-    {
-        vkFreeMemory(logical_device, mem, nullptr);
-    }
+    vkDestroyBuffer(logical_device, camera_data_buffer, nullptr);
+    vkFreeMemory(logical_device, camera_data_memory, nullptr);
     vkFreeMemory(logical_device, device_memory, nullptr);
     vkDestroyBuffer(logical_device, vertex_buffer, nullptr);
     for (const auto fence : in_flight_fences)
