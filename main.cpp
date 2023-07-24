@@ -22,6 +22,8 @@
 // TODO error message
 #define VK_CHECK(f) do { const auto result = f; if(result != VK_SUCCESS) throw std::runtime_error("");} while(0)
 
+camera g_camera;
+
 auto read_file(const std::string_view filename)
 {
     spdlog::debug("Reading file: {}", filename);
@@ -34,6 +36,11 @@ auto read_file(const std::string_view filename)
     return std::vector<char>(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
 }
 
+void mouse_callback(GLFWwindow* window, double x, double y)
+{
+    g_camera.look_around({ x, y });
+}
+
 auto create_glfw_window()
 {
     spdlog::trace("Create glfw window.");
@@ -42,6 +49,9 @@ auto create_glfw_window()
 
     const auto window = glfwCreateWindow(800, 600, "boids", nullptr, nullptr);
     assert(window);
+
+    glfwSetCursorPosCallback(window, mouse_callback);
+    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
 
     return window;
 }
@@ -1064,8 +1074,6 @@ auto pad_uniform_buffer_size(std::size_t original_size, std::size_t min_uniform_
 
 int main()
 {
-    camera camera;
-
     struct camera_data
     {
         glm::mat4 view;
@@ -1179,7 +1187,7 @@ int main()
     auto image_index = uint32_t{ 0 };
     while (!glfwWindowShouldClose(window))
     {
-        handle_keyboard(window, camera);
+        handle_keyboard(window, g_camera);
 
         const auto in_flight_fence = in_flight_fences[current_frame];
         const auto image_available_semaphore = image_available_semaphores[current_frame];
@@ -1245,9 +1253,9 @@ int main()
             .pClearValues = &clear_color
         };
 
-        cam_data.proj = camera.projection(glfw_extent.width, glfw_extent.height);
-        cam_data.view = camera.view();
-        cam_data.viewproj = camera.projection(glfw_extent.width, glfw_extent.height) * camera.view() ;
+        cam_data.proj = g_camera.projection(glfw_extent.width, glfw_extent.height);
+        cam_data.view = g_camera.view();
+        cam_data.viewproj = g_camera.projection(glfw_extent.width, glfw_extent.height) * g_camera.view() ;
         std::memcpy(reinterpret_cast<char*>(camera_data_memory_ptr) + current_frame * camera_data_padded_size, &cam_data, sizeof(cam_data));
         update_descriptor_set(logical_device, descriptor_sets[current_frame], camera_data_buffer, current_frame * camera_data_padded_size, camera_data_padded_size);
 

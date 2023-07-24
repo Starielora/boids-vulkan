@@ -5,8 +5,9 @@
 
 class camera final
 {
-	float _camera_speed = 0.25f;
-	float _yaw = -90.0f;	// yaw is initialized to -90.0 degrees since a yaw of 0.0 results in a direction vector pointing to the right so we initially rotate a bit to the left.
+	float _speed = 0.25f;
+	float _sensitivity = 0.1f;
+	float _yaw = -90.0f;
 	float _pitch = 0.0f;
 	float _fov = 45.0f;
 
@@ -24,22 +25,22 @@ public:
 
 	void move_forward()
 	{
-		_camera_pos += _camera_speed * _camera_front;
+		_camera_pos += _speed * _camera_front;
 	}
 
 	void move_back()
 	{
-		_camera_pos -= _camera_speed * _camera_front;
+		_camera_pos -= _speed * _camera_front;
 	}
 
 	void strafe_left()
 	{
-		_camera_pos -= glm::normalize(glm::cross(_camera_front, _camera_up)) * _camera_speed;
+		_camera_pos -= glm::normalize(glm::cross(_camera_front, _camera_up)) * _speed;
 	}
 
 	void strafe_right()
 	{
-		_camera_pos += glm::normalize(glm::cross(_camera_front, _camera_up)) * _camera_speed;
+		_camera_pos += glm::normalize(glm::cross(_camera_front, _camera_up)) * _speed;
 	}
 
 	void fov(float offset)
@@ -49,5 +50,38 @@ public:
 			_fov = 1.0f;
 		if (_fov > 45.0f)
 			_fov = 45.0f;
+	}
+
+	void look_around(glm::vec2 screen_offset)
+	{
+		static bool first_mouse = true;
+		static glm::vec2 last_mouse_pos{0, 0};
+
+		if (first_mouse)
+		{
+			last_mouse_pos = screen_offset;
+			first_mouse = false;
+		}
+
+		auto offset = glm::vec2(screen_offset.x - last_mouse_pos.x, last_mouse_pos.y - screen_offset.y);
+		last_mouse_pos = screen_offset;
+
+		offset *= _sensitivity;
+
+		_yaw += offset.x;
+		_pitch += offset.y;
+
+		if (_pitch > 89.0f)
+			_pitch = 89.0f;
+		if (_pitch < -89.0f)
+			_pitch = -89.0f;
+
+		glm::vec3 direction;
+		direction.x = cos(glm::radians(_yaw)) * cos(glm::radians(_pitch));
+		direction.y = -sin(glm::radians(_pitch));
+		direction.z = sin(glm::radians(_yaw)) * cos(glm::radians(_pitch));
+		_camera_front = glm::normalize(direction);
+		const auto camera_right = glm::normalize(glm::cross(_camera_front, {0, 1, 0}));
+		_camera_up = glm::normalize(glm::cross(camera_right, _camera_front));
 	}
 };
