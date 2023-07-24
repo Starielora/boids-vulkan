@@ -7,7 +7,7 @@ project(boids-vulkan)
     add_subdirectory(deps)
     add_subdirectory(shaders)
 
-    add_executable(boids main.cpp)
+    add_executable(boids main.cpp camera.hpp)
 
     target_link_libraries(boids PRIVATE volk glm glfw spdlog::spdlog)
 

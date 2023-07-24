@@ -1,6 +1,6 @@
-#define NOMINMAX
-#include <iostream>
+#include "camera.hpp"
 
+#define NOMINMAX
 #define VK_NO_PROTOTYPES
 #include <Volk/volk.h>
 #include <GLFW/glfw3.h>
@@ -160,7 +160,7 @@ auto check_instance_layers(const std::vector<const char*>& requested_layers)
 
         if (!found)
         {
-            std::cerr << requested << " layer not found.\n";
+            spdlog::error("Requested layer not found: {}", requested);
         }
     }
 
@@ -442,7 +442,7 @@ VkShaderModule create_shader_module(VkDevice logical_device, const std::vector<c
     return shader_module;
 }
 
-auto create_graphics_pipeline(VkDevice logical_device, VkExtent2D swapchain_extent, VkFormat swapchain_format)
+auto create_graphics_pipeline(VkDevice logical_device, VkExtent2D swapchain_extent, VkFormat swapchain_format, const VkDescriptorSetLayout& camera_data_descriptor_set)
 {
     spdlog::info("Loading shaders");
     const auto triangle_vertex_shader = create_shader_module(logical_device, read_file(shader_path::vertex::triangle));
@@ -568,12 +568,16 @@ auto create_graphics_pipeline(VkDevice logical_device, VkExtent2D swapchain_exte
         .blendConstants = {0.f, 0.f, 0.f, 0.f}
     };
 
+    const auto descriptor_set_layouts = std::array{
+        camera_data_descriptor_set
+    };
+
     const auto pipeline_layout_create_info = VkPipelineLayoutCreateInfo{
         .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
         .pNext = nullptr,
         .flags = 0,
-        .setLayoutCount = 0,
-        .pSetLayouts = nullptr,
+        .setLayoutCount = 1,
+        .pSetLayouts = descriptor_set_layouts.data(),
         .pushConstantRangeCount = 0,
         .pPushConstantRanges = nullptr
     };
@@ -849,11 +853,31 @@ auto recreate_swapchain(GLFWwindow* window, VkDevice logical_device, VkPhysicalD
     return std::tuple{glfw_extent, swapchain, surface_format, swapchain_images, swapchain_image_views, render_pass, swapchain_framebuffers};
 }
 
-void handle_keyboard(GLFWwindow* window)
+void handle_keyboard(GLFWwindow* window, camera& camera)
 {
     if (glfwGetKey(window, GLFW_KEY_ESCAPE))
     {
         glfwSetWindowShouldClose(window, true);
+    }
+
+    if (glfwGetKey(window, GLFW_KEY_W))
+    {
+        camera.move_forward();
+    }
+
+    if (glfwGetKey(window, GLFW_KEY_S))
+    {
+        camera.move_back();
+    }
+
+    if (glfwGetKey(window, GLFW_KEY_A))
+    {
+        camera.strafe_left();
+    }
+
+    if (glfwGetKey(window, GLFW_KEY_D))
+    {
+        camera.strafe_right();
     }
 }
 
@@ -877,6 +901,18 @@ auto create_buffer(VkDevice logical_device, uint32_t queue_family_index, std::si
     vkGetBufferMemoryRequirements(logical_device, buffer, &memory_requirements);
 
     return std::tuple{buffer, memory_requirements};
+}
+
+auto create_buffers(VkDevice logical_device, uint32_t queue_family_index, std::size_t size, VkBufferUsageFlags usage, std::size_t count)
+{
+    auto data = std::vector<std::tuple<VkBuffer, VkMemoryRequirements>>(count);
+
+    for (std::size_t i = 0; i < count; ++i)
+    {
+        data[i] = create_buffer(logical_device, queue_family_index, size, usage);
+    }
+
+    return data;
 }
 
 auto find_memory_type_index(VkPhysicalDevice physical_device, uint32_t memory_type_requirements, VkMemoryPropertyFlags memory_property_flags)
@@ -923,15 +959,117 @@ auto map_memory(VkDevice logical_device, VkDeviceMemory device_memory, uint32_t 
     vkUnmapMemory(logical_device, device_memory);
 }
 
+auto create_descriptor_set_layout(VkDevice logical_device)
+{
+    const auto binding = VkDescriptorSetLayoutBinding{
+        .binding = 0,
+        .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+        .descriptorCount = 1,
+        .stageFlags = VK_SHADER_STAGE_ALL_GRAPHICS,
+        .pImmutableSamplers = nullptr
+    };
+
+    const auto create_info = VkDescriptorSetLayoutCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT,
+        .bindingCount = 1,
+        .pBindings = &binding
+    };
+
+    auto layout = VkDescriptorSetLayout{};
+    VK_CHECK(vkCreateDescriptorSetLayout(logical_device, &create_info, nullptr, &layout));
+
+    return layout;
+}
+
+auto create_descriptor_pool(VkDevice logical_device)
+{
+    const auto pool_size = VkDescriptorPoolSize{
+        .type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+        .descriptorCount = 2
+    };
+
+    const auto create_info = VkDescriptorPoolCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT,
+        .maxSets = 2,
+        .poolSizeCount = 1,
+        .pPoolSizes = &pool_size
+    };
+
+    auto pool = VkDescriptorPool{};
+    VK_CHECK(vkCreateDescriptorPool(logical_device, &create_info, nullptr, &pool));
+    return pool;
+}
+
+auto allocate_descriptor_sets(VkDevice logical_device, const VkDescriptorSetLayout& layout, const VkDescriptorPool& pool, std::size_t count)
+{
+    auto sets = std::vector<VkDescriptorSet>(count);
+
+    for (std::size_t i = 0; i < count; ++i)
+    {
+        const auto allocate_info = VkDescriptorSetAllocateInfo{
+            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+            .pNext = nullptr,
+            .descriptorPool = pool,
+            .descriptorSetCount = 1,
+            .pSetLayouts = &layout
+        };
+
+        auto descriptor_set = VkDescriptorSet{};
+        VK_CHECK(vkAllocateDescriptorSets(logical_device, &allocate_info, &descriptor_set));
+
+        sets[i] = descriptor_set;
+    }
+    return sets;
+}
+
+auto update_descriptor_set(VkDevice logical_device, VkDescriptorSet descriptor_set, VkBuffer buffer)
+{
+    const auto buffer_info = VkDescriptorBufferInfo{
+        .buffer = buffer,
+        .offset = 0,
+        .range = VK_WHOLE_SIZE
+    };
+
+    const auto descriptor_write = VkWriteDescriptorSet{
+        .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+        .pNext = nullptr,
+        .dstSet = descriptor_set,
+        .dstBinding = 0,
+        .dstArrayElement = 0,
+        .descriptorCount = 1,
+        .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+        .pImageInfo = nullptr,
+        .pBufferInfo = &buffer_info,
+        .pTexelBufferView = nullptr
+    };
+
+    vkUpdateDescriptorSets(logical_device, 1, &descriptor_write, 0, nullptr);
+}
+
 int main()
 {
-    struct Vertex
+    camera camera;
+
+    struct camera_data
+    {
+        glm::mat4 view;
+        glm::mat4 proj;
+        glm::mat4 viewproj;
+    };
+
+    camera_data cam_data;
+
+    struct vertex
     {
         glm::vec3 pos;
         glm::vec3 color;
     };
 
-    auto triangle_vertex_buffer = std::vector<Vertex>{
+    auto triangle_vertex_buffer = std::vector<vertex>{
         { glm::vec3{ -0.5f, 0.5f, 0.f }, glm::vec3{ 1.f, 0.f, 0.f } },
         { glm::vec3{ -0.5, -0.5, 0.f }, glm::vec3{ 0.f, 1.f, 0.f } },
         { glm::vec3{ 0.5, 0.5, 0.f }, glm::vec3{ 0.f, 0.f, 1.f } },
@@ -942,7 +1080,7 @@ int main()
         0, 1, 2, 1, 3, 2
     };
 
-    const auto triangle_vertex_buffer_size = triangle_vertex_buffer.size() * sizeof(Vertex);
+    const auto triangle_vertex_buffer_size = triangle_vertex_buffer.size() * sizeof(vertex);
     const auto triangle_index_buffer_size = triangle_index_buffer.size() * sizeof(decltype(triangle_index_buffer)::value_type);
 
     spdlog::set_level(spdlog::level::trace);
@@ -992,11 +1130,29 @@ int main()
     auto [swapchain, surface_format] = create_swapchain(logical_device, physical_device, surface, queue_family_index, glfw_extent);
     auto [swapchain_images, swapchain_image_views] = get_swapchain_images(logical_device, swapchain, surface_format.format);
 
-    auto [pipeline, pipeline_layout, render_pass] = create_graphics_pipeline(logical_device, glfw_extent, surface_format.format);
+    const auto camera_data_descriptor_set_layout = create_descriptor_set_layout(logical_device);
+    auto [pipeline, pipeline_layout, render_pass] = create_graphics_pipeline(logical_device, glfw_extent, surface_format.format, camera_data_descriptor_set_layout);
+
+    constexpr auto max_frames_in_flight = 2;
+
+    const auto descriptor_pool = create_descriptor_pool(logical_device);
+    const auto descriptor_sets = allocate_descriptor_sets(logical_device, camera_data_descriptor_set_layout, descriptor_pool, max_frames_in_flight);
+    const auto camera_data_buffers = create_buffers(logical_device, queue_family_index, sizeof(camera_data), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, max_frames_in_flight);
+    auto camera_data_memory_ptrs = std::vector<void*>(max_frames_in_flight);
+    auto camera_data_memory = std::vector<VkDeviceMemory>(max_frames_in_flight);
+
+    for (std::size_t i = 0; const auto& [buffer, memory_requirements] : camera_data_buffers)
+    {
+        const auto camera_data_memory_type_index = find_memory_type_index(physical_device, memory_requirements.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        camera_data_memory[i] = allocate_buffer(logical_device, sizeof(camera_data), camera_data_memory_type_index);
+        VK_CHECK(vkBindBufferMemory(logical_device, buffer, camera_data_memory[i], 0));
+        VK_CHECK(vkMapMemory(logical_device, camera_data_memory[i], 0, VK_WHOLE_SIZE, 0, &camera_data_memory_ptrs[i]));
+        i++;
+    }
+
     auto swapchain_framebuffers = create_swapchain_framebuffers(logical_device, render_pass, swapchain_image_views, glfw_extent);
     const auto command_pool = create_command_pool(logical_device, queue_family_index);
 
-    constexpr auto max_frames_in_flight = 2;
     const auto command_buffers = create_command_buffers(logical_device, command_pool, max_frames_in_flight);
 
     const auto& [vertex_buffer, vertex_buffer_memory_requirements] = create_buffer(logical_device, queue_family_index, triangle_vertex_buffer_size + triangle_index_buffer_size, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
@@ -1015,7 +1171,7 @@ int main()
     auto image_index = uint32_t{ 0 };
     while (!glfwWindowShouldClose(window))
     {
-        handle_keyboard(window);
+        handle_keyboard(window, camera);
 
         const auto in_flight_fence = in_flight_fences[current_frame];
         const auto image_available_semaphore = image_available_semaphores[current_frame];
@@ -1081,6 +1237,12 @@ int main()
             .pClearValues = &clear_color
         };
 
+        cam_data.proj = camera.projection(glfw_extent.width, glfw_extent.height);
+        cam_data.view = camera.view();
+        cam_data.viewproj = camera.projection(glfw_extent.width, glfw_extent.height) * camera.view() ;
+        std::memcpy(camera_data_memory_ptrs[current_frame], &cam_data, sizeof(cam_data));
+        update_descriptor_set(logical_device, descriptor_sets[current_frame], std::get<0>(camera_data_buffers[current_frame]));
+
         vkCmdBeginRenderPass(command_buffer, &render_pass_begin_info, VK_SUBPASS_CONTENTS_INLINE);
 
         const auto viewport = VkViewport{
@@ -1104,6 +1266,7 @@ int main()
         vkCmdSetScissor(command_buffer, 0, 1, &scissors);
 
         vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+        vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout, 0, 1, &descriptor_sets[current_frame], 0, nullptr);
         const auto offsets = std::array<VkDeviceSize, 1>{ 0 };
         vkCmdBindVertexBuffers(command_buffer, 0, 1, &vertex_buffer, offsets.data());
         vkCmdBindIndexBuffer(command_buffer, vertex_buffer, triangle_vertex_buffer_size, VK_INDEX_TYPE_UINT16);
@@ -1149,6 +1312,17 @@ int main()
     VK_CHECK(vkDeviceWaitIdle(logical_device));
 
     spdlog::trace("Cleanup.");
+
+    vkDestroyDescriptorPool(logical_device, descriptor_pool, nullptr);
+    vkDestroyDescriptorSetLayout(logical_device, camera_data_descriptor_set_layout, nullptr);
+    for (const auto [buffer, _] : camera_data_buffers)
+    {
+        vkDestroyBuffer(logical_device, buffer, nullptr);
+    }
+    for (const auto mem : camera_data_memory)
+    {
+        vkFreeMemory(logical_device, mem, nullptr);
+    }
     vkFreeMemory(logical_device, device_memory, nullptr);
     vkDestroyBuffer(logical_device, vertex_buffer, nullptr);
     for (const auto fence : in_flight_fences)
