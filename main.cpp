@@ -881,7 +881,7 @@ void handle_keyboard(GLFWwindow* window, camera& camera)
     }
 }
 
-auto create_buffer(VkDevice logical_device, uint32_t queue_family_index, std::size_t size, VkBufferUsageFlags usage)
+auto create_buffer(VkDevice logical_device, std::size_t size, VkBufferUsageFlags usage)
 {
     const auto create_info = VkBufferCreateInfo{
         .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
@@ -890,8 +890,8 @@ auto create_buffer(VkDevice logical_device, uint32_t queue_family_index, std::si
         .size = size,
         .usage = usage,
         .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
-        .queueFamilyIndexCount = 1,
-        .pQueueFamilyIndices = &queue_family_index
+        .queueFamilyIndexCount = 0,
+        .pQueueFamilyIndices = nullptr
     };
 
     auto buffer = VkBuffer{};
@@ -903,13 +903,13 @@ auto create_buffer(VkDevice logical_device, uint32_t queue_family_index, std::si
     return std::tuple{buffer, memory_requirements};
 }
 
-auto create_buffers(VkDevice logical_device, uint32_t queue_family_index, std::size_t size, VkBufferUsageFlags usage, std::size_t count)
+auto create_buffers(VkDevice logical_device, std::size_t size, VkBufferUsageFlags usage, std::size_t count)
 {
     auto data = std::vector<std::tuple<VkBuffer, VkMemoryRequirements>>(count);
 
     for (std::size_t i = 0; i < count; ++i)
     {
-        data[i] = create_buffer(logical_device, queue_family_index, size, usage);
+        data[i] = create_buffer(logical_device, size, usage);
     }
 
     return data;
@@ -1137,7 +1137,7 @@ int main()
 
     const auto descriptor_pool = create_descriptor_pool(logical_device);
     const auto descriptor_sets = allocate_descriptor_sets(logical_device, camera_data_descriptor_set_layout, descriptor_pool, max_frames_in_flight);
-    const auto camera_data_buffers = create_buffers(logical_device, queue_family_index, sizeof(camera_data), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, max_frames_in_flight);
+    const auto camera_data_buffers = create_buffers(logical_device, sizeof(camera_data), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, max_frames_in_flight);
     auto camera_data_memory_ptrs = std::vector<void*>(max_frames_in_flight);
     auto camera_data_memory = std::vector<VkDeviceMemory>(max_frames_in_flight);
 
@@ -1155,7 +1155,7 @@ int main()
 
     const auto command_buffers = create_command_buffers(logical_device, command_pool, max_frames_in_flight);
 
-    const auto& [vertex_buffer, vertex_buffer_memory_requirements] = create_buffer(logical_device, queue_family_index, triangle_vertex_buffer_size + triangle_index_buffer_size, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
+    const auto& [vertex_buffer, vertex_buffer_memory_requirements] = create_buffer(logical_device, triangle_vertex_buffer_size + triangle_index_buffer_size, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
     const auto vertex_memory_type_index = find_memory_type_index(physical_device, vertex_buffer_memory_requirements.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
     const auto device_memory = allocate_buffer(logical_device, triangle_vertex_buffer_size + triangle_index_buffer_size, vertex_memory_type_index);
     VK_CHECK(vkBindBufferMemory(logical_device, vertex_buffer, device_memory, 0));
