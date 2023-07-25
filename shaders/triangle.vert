@@ -7,8 +7,7 @@ layout(location = 0) out vec3 fragColor;
 
 layout(set = 0, binding = 0) uniform CameraData
 {
-    mat4 view;
-    mat4 proj;
+    vec4 position;
     mat4 projview;
 } camera_data;
 

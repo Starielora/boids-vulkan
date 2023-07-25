@@ -11,7 +11,7 @@ class camera final
 	float _pitch = 0.0f;
 	float _fov = 45.0f;
 
-	glm::vec3 _camera_pos = glm::vec3(0.0f, 0.0f, 3.0f);
+	glm::vec3 _camera_pos = glm::vec3(0.0f, -1.0f, 3.0f);
 	glm::vec3 _camera_front = glm::vec3(0.0f, 0.0f, -1.0f);
 	glm::vec3 _camera_up = glm::vec3(0.0f, 1.0f, 0.0f);
 

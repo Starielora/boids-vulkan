@@ -48,6 +48,18 @@ project(shaders)
         VARIABLE_NAME_HEADER triangle
     )
 
+    add_shader(VERTEX
+        INPUT_FILE grid.vert
+        OUTPUT_FILE grid.vert.spv
+        VARIABLE_NAME_HEADER grid
+    )
+
+    add_shader(FRAGMENT
+        INPUT_FILE grid.frag
+        OUTPUT_FILE grid.frag.spv
+        VARIABLE_NAME_HEADER grid
+    )
+
     set(shaders_header_contents
 "#pragma once
 

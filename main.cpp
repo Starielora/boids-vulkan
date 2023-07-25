@@ -21,6 +21,7 @@
 
 // TODO error message
 #define VK_CHECK(f) do { const auto result = f; if(result != VK_SUCCESS) throw std::runtime_error("");} while(0)
+constexpr bool VALIDATION_LAYERS = false;
 
 camera g_camera;
 
@@ -452,13 +453,15 @@ VkShaderModule create_shader_module(VkDevice logical_device, const std::vector<c
     return shader_module;
 }
 
-auto create_graphics_pipeline(VkDevice logical_device, VkExtent2D swapchain_extent, VkFormat swapchain_format, const VkDescriptorSetLayout& camera_data_descriptor_set)
+auto create_graphics_pipelines(VkDevice logical_device, VkExtent2D swapchain_extent, VkFormat swapchain_format, const VkDescriptorSetLayout& camera_data_descriptor_set)
 {
     spdlog::info("Loading shaders");
     const auto triangle_vertex_shader = create_shader_module(logical_device, read_file(shader_path::vertex::triangle));
     const auto triangle_fragment_shader = create_shader_module(logical_device, read_file(shader_path::fragment::triangle));
+    const auto grid_vertex_shader = create_shader_module(logical_device, read_file(shader_path::vertex::grid));
+    const auto grid_fragment_shader = create_shader_module(logical_device, read_file(shader_path::fragment::grid));
 
-    const auto shader_stage_create_infos = std::array{
+    const auto triangle_shader_stage_create_infos = std::array{
         VkPipelineShaderStageCreateInfo{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
             .pNext = nullptr,
@@ -476,6 +479,27 @@ auto create_graphics_pipeline(VkDevice logical_device, VkExtent2D swapchain_exte
             .module = triangle_fragment_shader,
             .pName = "main",
             .pSpecializationInfo = nullptr
+        },
+    };
+
+    const auto grid_shader_stage_create_infos = std::array{
+        VkPipelineShaderStageCreateInfo{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .stage = VK_SHADER_STAGE_VERTEX_BIT,
+            .module = grid_vertex_shader,
+            .pName = "main",
+            .pSpecializationInfo = nullptr
+        },
+        VkPipelineShaderStageCreateInfo{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
+            .module = grid_fragment_shader,
+            .pName = "main",
+            .pSpecializationInfo = nullptr
         }
     };
 
@@ -488,9 +512,9 @@ auto create_graphics_pipeline(VkDevice logical_device, VkExtent2D swapchain_exte
     const auto vertexAttributeDescriptions = std::array{
         VkVertexInputAttributeDescription{
             .location = 0,
-                .binding = 0,
-                .format = VK_FORMAT_R32G32B32_SFLOAT,
-                .offset = 0
+            .binding = 0,
+            .format = VK_FORMAT_R32G32B32_SFLOAT,
+            .offset = 0
         },
         VkVertexInputAttributeDescription{
             .location = 1,
@@ -667,35 +691,60 @@ auto create_graphics_pipeline(VkDevice logical_device, VkExtent2D swapchain_exte
     auto render_pass = VkRenderPass{};
     VK_CHECK(vkCreateRenderPass(logical_device, &render_pass_create_info, nullptr, &render_pass));
 
-    const auto pipeline_create_info = VkGraphicsPipelineCreateInfo{
-        .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
-        .pNext = nullptr,
-        .flags = 0,
-        .stageCount = shader_stage_create_infos.size(),
-        .pStages = shader_stage_create_infos.data(),
-        .pVertexInputState = &vertex_input_create_info,
-        .pInputAssemblyState = &input_assembly_create_info,
-        .pTessellationState = nullptr,
-        .pViewportState = &viewport_state_create_info,
-        .pRasterizationState = &rasterization_state_create_info,
-        .pMultisampleState = &multisample_state_create_info,
-        .pDepthStencilState = nullptr,
-        .pColorBlendState = &color_blend_state_create_info,
-        .pDynamicState = nullptr,
-        .layout = pipeline_layout,
-        .renderPass = render_pass,
-        .subpass = 0,
-        .basePipelineHandle = VK_NULL_HANDLE,
-        .basePipelineIndex = 0
+    const auto pipeline_create_infos = std::array{
+        VkGraphicsPipelineCreateInfo{
+            .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .stageCount = triangle_shader_stage_create_infos.size(),
+            .pStages = triangle_shader_stage_create_infos.data(),
+            .pVertexInputState = &vertex_input_create_info,
+            .pInputAssemblyState = &input_assembly_create_info,
+            .pTessellationState = nullptr,
+            .pViewportState = &viewport_state_create_info,
+            .pRasterizationState = &rasterization_state_create_info,
+            .pMultisampleState = &multisample_state_create_info,
+            .pDepthStencilState = nullptr,
+            .pColorBlendState = &color_blend_state_create_info,
+            .pDynamicState = nullptr,
+            .layout = pipeline_layout,
+            .renderPass = render_pass,
+            .subpass = 0,
+            .basePipelineHandle = VK_NULL_HANDLE,
+            .basePipelineIndex = 0
+        },
+        VkGraphicsPipelineCreateInfo{
+            .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .stageCount = grid_shader_stage_create_infos.size(),
+            .pStages = grid_shader_stage_create_infos.data(),
+            .pVertexInputState = nullptr,
+            .pInputAssemblyState = &input_assembly_create_info,
+            .pTessellationState = nullptr,
+            .pViewportState = &viewport_state_create_info,
+            .pRasterizationState = &rasterization_state_create_info,
+            .pMultisampleState = &multisample_state_create_info,
+            .pDepthStencilState = nullptr,
+            .pColorBlendState = &color_blend_state_create_info,
+            .pDynamicState = nullptr,
+            .layout = pipeline_layout,
+            .renderPass = render_pass,
+            .subpass = 0,
+            .basePipelineHandle = VK_NULL_HANDLE,
+            .basePipelineIndex = 0
+        }
     };
 
-    auto pipeline = VkPipeline{ 0 };
-    vkCreateGraphicsPipelines(logical_device, VK_NULL_HANDLE, 1, &pipeline_create_info, nullptr, &pipeline);
+    auto pipelines = std::array{ VkPipeline{ 0 }, VkPipeline{ 0 }};
+    vkCreateGraphicsPipelines(logical_device, VK_NULL_HANDLE, pipeline_create_infos.size(), pipeline_create_infos.data(), nullptr, pipelines.data());
 
     vkDestroyShaderModule(logical_device, triangle_vertex_shader, nullptr);
     vkDestroyShaderModule(logical_device, triangle_fragment_shader, nullptr);
+    vkDestroyShaderModule(logical_device, grid_vertex_shader, nullptr);
+    vkDestroyShaderModule(logical_device, grid_fragment_shader, nullptr);
 
-    return std::tuple{pipeline, pipeline_layout, render_pass};
+    return std::tuple{pipelines[0], pipelines[1], pipeline_layout, render_pass};
 }
 
 auto create_swapchain_framebuffers(VkDevice logical_device, VkRenderPass render_pass, const std::vector<VkImageView> swapchain_imageviews, VkExtent2D swapchain_extent)
@@ -803,13 +852,14 @@ auto recreate_graphics_pipeline_and_swapchain(GLFWwindow* window, VkDevice logic
     spdlog::debug("GLFW framebuffer size: ({}, {})", glfw_fb_extent_width, glfw_fb_extent_height);
     const auto glfw_extent = VkExtent2D{ static_cast<uint32_t>(glfw_fb_extent_width), static_cast<uint32_t>(glfw_fb_extent_height) };
 
-    const auto [pipeline, pipeline_layout, render_pass] = create_graphics_pipeline(logical_device, glfw_extent, swapchain_format, camera_data_descriptor_set_layout);
+    // TODO reuse old pipeline handle for faster recreation
+    const auto [triangle_pipeline, grid_pipeline, pipeline_layout, render_pass] = create_graphics_pipelines(logical_device, glfw_extent, swapchain_format, camera_data_descriptor_set_layout);
     const auto [swapchain, surface_format] = create_swapchain(logical_device, physical_device, surface, queue_family_index, glfw_extent);
     const auto [swapchain_images, swapchain_image_views] = get_swapchain_images(logical_device, swapchain, surface_format.format);
 
     const auto swapchain_framebuffers = create_swapchain_framebuffers(logical_device, render_pass, swapchain_image_views, glfw_extent);
 
-    return std::tuple{pipeline, pipeline_layout, glfw_extent, swapchain, surface_format, swapchain_images, swapchain_image_views, render_pass, swapchain_framebuffers};
+    return std::tuple{triangle_pipeline, grid_pipeline, pipeline_layout, glfw_extent, swapchain, surface_format, swapchain_images, swapchain_image_views, render_pass, swapchain_framebuffers};
 }
 
 void handle_keyboard(GLFWwindow* window, camera& camera)
@@ -1025,8 +1075,7 @@ int main()
 {
     struct camera_data
     {
-        glm::mat4 view;
-        glm::mat4 proj;
+        glm::vec4 position;
         glm::mat4 viewproj;
     };
 
@@ -1062,13 +1111,17 @@ int main()
 
     const auto window = create_glfw_window();
 
-    const auto requested_instance_layers = std::vector<const char*>{ "VK_LAYER_KHRONOS_validation" };
+
+    const auto requested_instance_layers = VALIDATION_LAYERS ? std::vector<const char*>{ "VK_LAYER_KHRONOS_validation" } : std::vector<const char*>{};
     const auto required_device_extensions = std::vector<const char*>{ VK_KHR_SWAPCHAIN_EXTENSION_NAME };
 
-    const auto instance_layers_found = check_instance_layers(requested_instance_layers);
-    if (!instance_layers_found)
+    if (VALIDATION_LAYERS)
     {
-        return 1;
+        const auto instance_layers_found = check_instance_layers(requested_instance_layers);
+        if (!instance_layers_found)
+        {
+            return 1;
+        }
     }
 
     auto glfw_extensions_count = uint32_t{ 0 };
@@ -1100,7 +1153,7 @@ int main()
     auto [swapchain_images, swapchain_image_views] = get_swapchain_images(logical_device, swapchain, surface_format.format);
 
     const auto camera_data_descriptor_set_layout = create_descriptor_set_layout(logical_device);
-    auto [pipeline, pipeline_layout, render_pass] = create_graphics_pipeline(logical_device, glfw_extent, surface_format.format, camera_data_descriptor_set_layout);
+    auto [triangle_pipeline, grid_pipeline, pipeline_layout, render_pass] = create_graphics_pipelines(logical_device, glfw_extent, surface_format.format, camera_data_descriptor_set_layout);
 
     constexpr auto max_frames_in_flight = 2;
 
@@ -1163,8 +1216,9 @@ int main()
                 }
                 vkDestroyRenderPass(logical_device, render_pass, nullptr);
                 vkDestroyPipelineLayout(logical_device, pipeline_layout, nullptr);
-                vkDestroyPipeline(logical_device, pipeline, nullptr);
-                std::tie(pipeline, pipeline_layout, glfw_extent, swapchain, surface_format, swapchain_images, swapchain_image_views, render_pass, swapchain_framebuffers) = recreate_graphics_pipeline_and_swapchain(window, logical_device, physical_device, surface, queue_family_index, surface_format.format, camera_data_descriptor_set_layout);
+                vkDestroyPipeline(logical_device, triangle_pipeline, nullptr);
+                vkDestroyPipeline(logical_device, grid_pipeline, nullptr);
+                std::tie(triangle_pipeline, grid_pipeline, pipeline_layout, glfw_extent, swapchain, surface_format, swapchain_images, swapchain_image_views, render_pass, swapchain_framebuffers) = recreate_graphics_pipeline_and_swapchain(window, logical_device, physical_device, surface, queue_family_index, surface_format.format, camera_data_descriptor_set_layout);
                 continue;
             }
             else if (result != VK_SUCCESS)
@@ -1204,15 +1258,18 @@ int main()
             .pClearValues = &clear_color
         };
 
-        cam_data.proj = g_camera.projection(glfw_extent.width, glfw_extent.height);
-        cam_data.view = g_camera.view();
-        cam_data.viewproj = g_camera.projection(glfw_extent.width, glfw_extent.height) * g_camera.view() ;
+        cam_data.position = glm::vec4(g_camera.position(), 0.f);
+        cam_data.viewproj = g_camera.projection(glfw_extent.width, glfw_extent.height) * g_camera.view();
         std::memcpy(reinterpret_cast<char*>(camera_data_memory_ptr) + current_frame * camera_data_padded_size, &cam_data, sizeof(cam_data));
         update_descriptor_set(logical_device, descriptor_sets[current_frame], camera_data_buffer, current_frame * camera_data_padded_size, camera_data_padded_size);
 
         vkCmdBeginRenderPass(command_buffer, &render_pass_begin_info, VK_SUBPASS_CONTENTS_INLINE);
 
-        vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+        vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, grid_pipeline);
+        vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout, 0, 1, &descriptor_sets[current_frame], 0, nullptr);
+        vkCmdDraw(command_buffer, 6, 1, 0, 0);
+
+        vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, triangle_pipeline);
         vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout, 0, 1, &descriptor_sets[current_frame], 0, nullptr);
         const auto offsets = std::array{ VkDeviceSize{ 0 } };
         vkCmdBindVertexBuffers(command_buffer, 0, 1, &vertex_buffer, offsets.data());
@@ -1288,7 +1345,8 @@ int main()
         vkDestroyImageView(logical_device, iv, nullptr);
     }
     vkDestroyPipelineLayout(logical_device, pipeline_layout, nullptr);
-    vkDestroyPipeline(logical_device, pipeline, nullptr);
+    vkDestroyPipeline(logical_device, triangle_pipeline, nullptr);
+    vkDestroyPipeline(logical_device, grid_pipeline, nullptr);
     vkDestroyRenderPass(logical_device, render_pass, nullptr);
     vkDestroySwapchainKHR(logical_device, swapchain, nullptr);
     vkDestroySurfaceKHR(vk_instance, surface, nullptr);
