@@ -282,9 +282,14 @@ auto create_logical_device(VkPhysicalDevice physical_device, uint32_t queue_fami
         .pQueuePriorities = &queue_prio
     };
 
+    const auto dynamic_rendering_feature = VkPhysicalDeviceDynamicRenderingFeaturesKHR{
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES_KHR,
+        .dynamicRendering = VK_TRUE,
+    };
+
     const auto create_info = VkDeviceCreateInfo{
         .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
-        .pNext = nullptr,
+        .pNext = &dynamic_rendering_feature,
         .flags = 0,
         .queueCreateInfoCount = 1,
         .pQueueCreateInfos = &queue_create_info,
@@ -595,61 +600,6 @@ auto create_graphics_pipeline(VkDevice logical_device, VkExtent2D swapchain_exte
     auto pipeline_layout = VkPipelineLayout{};
     VK_CHECK(vkCreatePipelineLayout(logical_device, &pipeline_layout_create_info, nullptr, &pipeline_layout));
 
-    const auto color_attachment = VkAttachmentDescription{
-        .flags = 0,
-        .format = swapchain_format,
-        .samples = VK_SAMPLE_COUNT_1_BIT,
-        .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
-        .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
-        .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
-        .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
-        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-        .finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR
-    };
-
-    const auto attachmentRef = VkAttachmentReference{
-        .attachment = 0,
-        .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
-    };
-
-    const auto subpass = VkSubpassDescription{
-        .flags = 0,
-        .pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
-        .inputAttachmentCount = 0,
-        .pInputAttachments = nullptr,
-        .colorAttachmentCount = 1,
-        .pColorAttachments = &attachmentRef,
-        .pResolveAttachments = 0,
-        .pDepthStencilAttachment = nullptr,
-        .preserveAttachmentCount = 0,
-        .pPreserveAttachments = nullptr
-    };
-
-    const auto subpass_dependency = VkSubpassDependency{
-        .srcSubpass = VK_SUBPASS_EXTERNAL,
-        .dstSubpass = 0,
-        .srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-        .dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-        .srcAccessMask = 0,
-        .dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
-        .dependencyFlags = 0
-    };
-
-    const auto render_pass_create_info = VkRenderPassCreateInfo{
-        .sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
-        .pNext = nullptr,
-        .flags = 0,
-        .attachmentCount = 1,
-        .pAttachments = &color_attachment,
-        .subpassCount = 1,
-        .pSubpasses = &subpass,
-        .dependencyCount = 1,
-        .pDependencies = &subpass_dependency
-    };
-
-    auto render_pass = VkRenderPass{};
-    VK_CHECK(vkCreateRenderPass(logical_device, &render_pass_create_info, nullptr, &render_pass));
-
     const auto dynamic_states = std::array{
         VK_DYNAMIC_STATE_VIEWPORT,
         VK_DYNAMIC_STATE_SCISSOR,
@@ -664,9 +614,15 @@ auto create_graphics_pipeline(VkDevice logical_device, VkExtent2D swapchain_exte
         .pDynamicStates = dynamic_states.data()
     };
 
+    const VkPipelineRenderingCreateInfoKHR pipeline_rendering_create_info{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO_KHR,
+        .colorAttachmentCount = 1,
+        .pColorAttachmentFormats = &swapchain_format,
+    };
+
     const auto pipeline_create_info = VkGraphicsPipelineCreateInfo{
         .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
-        .pNext = nullptr,
+        .pNext = &pipeline_rendering_create_info,
         .flags = 0,
         .stageCount = shader_stage_create_infos.size(),
         .pStages = shader_stage_create_infos.data(),
@@ -680,7 +636,7 @@ auto create_graphics_pipeline(VkDevice logical_device, VkExtent2D swapchain_exte
         .pColorBlendState = &color_blend_state_create_info,
         .pDynamicState = &dynamic_state,
         .layout = pipeline_layout,
-        .renderPass = render_pass,
+        .renderPass = VK_NULL_HANDLE,
         .subpass = 0,
         .basePipelineHandle = VK_NULL_HANDLE,
         .basePipelineIndex = 0
@@ -692,31 +648,7 @@ auto create_graphics_pipeline(VkDevice logical_device, VkExtent2D swapchain_exte
     vkDestroyShaderModule(logical_device, triangle_vertex_shader, nullptr);
     vkDestroyShaderModule(logical_device, triangle_fragment_shader, nullptr);
 
-    return std::tuple{pipeline, pipeline_layout, render_pass};
-}
-
-auto create_swapchain_framebuffers(VkDevice logical_device, VkRenderPass render_pass, const std::vector<VkImageView> swapchain_imageviews, VkExtent2D swapchain_extent)
-{
-    auto framebuffers = std::vector<VkFramebuffer>(swapchain_imageviews.size());
-
-    for (int i = 0; const auto& image_view : swapchain_imageviews)
-    {
-        const auto create_info = VkFramebufferCreateInfo{
-            .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
-            .pNext = nullptr,
-            .flags = 0,
-            .renderPass = render_pass,
-            .attachmentCount = 1,
-            .pAttachments = &image_view,
-            .width = swapchain_extent.width,
-            .height = swapchain_extent.height,
-            .layers = 1
-        };
-
-        VK_CHECK(vkCreateFramebuffer(logical_device, &create_info, nullptr, &framebuffers[i]));
-    }
-
-    return framebuffers;
+    return std::tuple{pipeline, pipeline_layout};
 }
 
 auto create_command_pool(VkDevice logical_device, uint32_t queue_family_index)
@@ -803,64 +735,7 @@ auto recreate_swapchain(GLFWwindow* window, VkDevice logical_device, VkPhysicalD
     const auto [swapchain, surface_format] = create_swapchain(logical_device, physical_device, surface, queue_family_index, glfw_extent);
     const auto [swapchain_images, swapchain_image_views] = get_swapchain_images(logical_device, swapchain, surface_format.format);
 
-    const auto color_attachment = VkAttachmentDescription{
-        .flags = 0,
-        .format = swapchain_format,
-        .samples = VK_SAMPLE_COUNT_1_BIT,
-        .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
-        .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
-        .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
-        .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
-        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-        .finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR
-    };
-
-    const auto attachmentRef = VkAttachmentReference{
-        .attachment = 0,
-        .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
-    };
-
-    const auto subpass = VkSubpassDescription{
-        .flags = 0,
-        .pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
-        .inputAttachmentCount = 0,
-        .pInputAttachments = nullptr,
-        .colorAttachmentCount = 1,
-        .pColorAttachments = &attachmentRef,
-        .pResolveAttachments = 0,
-        .pDepthStencilAttachment = nullptr,
-        .preserveAttachmentCount = 0,
-        .pPreserveAttachments = nullptr
-    };
-
-    const auto subpass_dependency = VkSubpassDependency{
-        .srcSubpass = VK_SUBPASS_EXTERNAL,
-        .dstSubpass = 0,
-        .srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-        .dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-        .srcAccessMask = 0,
-        .dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
-        .dependencyFlags = 0
-    };
-
-    const auto render_pass_create_info = VkRenderPassCreateInfo{
-        .sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
-        .pNext = nullptr,
-        .flags = 0,
-        .attachmentCount = 1,
-        .pAttachments = &color_attachment,
-        .subpassCount = 1,
-        .pSubpasses = &subpass,
-        .dependencyCount = 1,
-        .pDependencies = &subpass_dependency
-    };
-
-    auto render_pass = VkRenderPass{};
-    VK_CHECK(vkCreateRenderPass(logical_device, &render_pass_create_info, nullptr, &render_pass));
-
-    const auto swapchain_framebuffers = create_swapchain_framebuffers(logical_device, render_pass, swapchain_image_views, glfw_extent);
-
-    return std::tuple{glfw_extent, swapchain, surface_format, swapchain_images, swapchain_image_views, render_pass, swapchain_framebuffers};
+    return std::tuple{glfw_extent, swapchain, surface_format, swapchain_images, swapchain_image_views};
 }
 
 void handle_keyboard(GLFWwindow* window, camera& camera)
@@ -1114,7 +989,7 @@ int main()
     const auto window = create_glfw_window();
 
     const auto requested_instance_layers = std::vector<const char*>{ "VK_LAYER_KHRONOS_validation" };
-    const auto required_device_extensions = std::vector<const char*>{ VK_KHR_SWAPCHAIN_EXTENSION_NAME };
+    const auto required_device_extensions = std::vector<const char*>{ VK_KHR_SWAPCHAIN_EXTENSION_NAME, VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME };
 
     const auto instance_layers_found = check_instance_layers(requested_instance_layers);
     if (!instance_layers_found)
@@ -1151,7 +1026,7 @@ int main()
     auto [swapchain_images, swapchain_image_views] = get_swapchain_images(logical_device, swapchain, surface_format.format);
 
     const auto camera_data_descriptor_set_layout = create_descriptor_set_layout(logical_device);
-    auto [pipeline, pipeline_layout, render_pass] = create_graphics_pipeline(logical_device, glfw_extent, surface_format.format, camera_data_descriptor_set_layout);
+    auto [pipeline, pipeline_layout] = create_graphics_pipeline(logical_device, glfw_extent, surface_format.format, camera_data_descriptor_set_layout);
 
     constexpr auto max_frames_in_flight = 2;
 
@@ -1166,7 +1041,6 @@ int main()
     VK_CHECK(vkBindBufferMemory(logical_device, camera_data_buffer, camera_data_memory, 0));
     VK_CHECK(vkMapMemory(logical_device, camera_data_memory, 0, VK_WHOLE_SIZE, 0, &camera_data_memory_ptr));
 
-    auto swapchain_framebuffers = create_swapchain_framebuffers(logical_device, render_pass, swapchain_image_views, glfw_extent);
     const auto command_pool = create_command_pool(logical_device, queue_family_index);
 
     const auto command_buffers = create_command_buffers(logical_device, command_pool, max_frames_in_flight);
@@ -1204,16 +1078,11 @@ int main()
             {
                 spdlog::info("Swapchain images no longer match native surface properties. Recreating swapchain.");
                 VK_CHECK(vkDeviceWaitIdle(logical_device));
-                for (const auto& fb : swapchain_framebuffers)
-                {
-                    vkDestroyFramebuffer(logical_device, fb, nullptr);
-                }
                 for (const auto iv : swapchain_image_views)
                 {
                     vkDestroyImageView(logical_device, iv, nullptr);
                 }
-                vkDestroyRenderPass(logical_device, render_pass, nullptr);
-                std::tie(glfw_extent, swapchain, surface_format, swapchain_images, swapchain_image_views, render_pass, swapchain_framebuffers) = recreate_swapchain(window, logical_device, physical_device, surface, queue_family_index, surface_format.format);
+                std::tie(glfw_extent, swapchain, surface_format, swapchain_images, swapchain_image_views) = recreate_swapchain(window, logical_device, physical_device, surface, queue_family_index, surface_format.format);
                 continue;
             }
             else if (result != VK_SUCCESS)
@@ -1240,18 +1109,24 @@ int main()
             }
         };
         
-        const auto render_pass_begin_info = VkRenderPassBeginInfo{
-            .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
-            .pNext = nullptr,
-            .renderPass = render_pass,
-            .framebuffer = swapchain_framebuffers[image_index],
-            .renderArea = VkRect2D {
-                .offset = VkOffset2D { 0, 0 },
-                .extent = glfw_extent
-            },
-            .clearValueCount = 1,
-            .pClearValues = &clear_color
-        };
+        {
+            const auto image_memory_barrier = VkImageMemoryBarrier{
+                .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                .dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+                .newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                .image = swapchain_images[image_index],
+                .subresourceRange = {
+                  .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                  .baseMipLevel = 0,
+                  .levelCount = 1,
+                  .baseArrayLayer = 0,
+                  .layerCount = 1,
+                }
+            };
+
+            vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0, nullptr, 0, nullptr, 1, &image_memory_barrier);
+        }
 
         cam_data.proj = g_camera.projection(glfw_extent.width, glfw_extent.height);
         cam_data.view = g_camera.view();
@@ -1259,7 +1134,40 @@ int main()
         std::memcpy(reinterpret_cast<char*>(camera_data_memory_ptr) + current_frame * camera_data_padded_size, &cam_data, sizeof(cam_data));
         update_descriptor_set(logical_device, descriptor_sets[current_frame], camera_data_buffer, current_frame * camera_data_padded_size, camera_data_padded_size);
 
-        vkCmdBeginRenderPass(command_buffer, &render_pass_begin_info, VK_SUBPASS_CONTENTS_INLINE);
+        const auto color_attachments = std::array{
+            VkRenderingAttachmentInfo{
+                .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+                .pNext = nullptr,
+                .imageView = swapchain_image_views[image_index],
+                .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                .resolveMode = VK_RESOLVE_MODE_NONE,
+                .resolveImageView = VK_NULL_HANDLE,
+                .resolveImageLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+                .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+                .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+                .clearValue = VkClearValue{
+                        .color = VkClearColorValue{
+                        .float32 = {130.f / 255.f, 163.f / 255.f, 255.f / 255.f}
+                    }
+                }
+            },
+        };
+        const auto rendering_info = VkRenderingInfo{
+            .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .renderArea = VkRect2D {
+                .offset = VkOffset2D { 0, 0 },
+                .extent = glfw_extent
+            },
+            .layerCount = 1,
+            .viewMask = 0,
+            .colorAttachmentCount = static_cast<uint32_t>(color_attachments.size()),
+            .pColorAttachments = color_attachments.data(),
+            .pDepthAttachment = nullptr,
+            .pStencilAttachment = nullptr,
+        };
+        vkCmdBeginRendering(command_buffer, &rendering_info);
 
         const auto viewport = VkViewport{
             .x = 0.f,
@@ -1304,7 +1212,27 @@ int main()
             .pSignalSemaphores = signal_semaphores.data(),
         };
 
-        vkCmdEndRenderPass(command_buffer);
+        vkCmdEndRendering(command_buffer);
+
+        {
+            const auto image_memory_barrier = VkImageMemoryBarrier{
+                .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                .srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                .oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                .newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+                .image = swapchain_images[image_index],
+                .subresourceRange = {
+                  .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                  .baseMipLevel = 0,
+                  .levelCount = 1,
+                  .baseArrayLayer = 0,
+                  .layerCount = 1,
+                }
+            };
+
+            vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, 1, &image_memory_barrier);
+        }
+
         VK_CHECK(vkEndCommandBuffer(command_buffer));
 
         VK_CHECK(vkQueueSubmit(present_queue, 1, &submit_info, in_flight_fence));
@@ -1348,17 +1276,12 @@ int main()
         vkDestroySemaphore(logical_device, sem, nullptr);
     }
     vkDestroyCommandPool(logical_device, command_pool, nullptr);
-    for (const auto& fb : swapchain_framebuffers)
-    {
-        vkDestroyFramebuffer(logical_device, fb, nullptr);
-    }
     for (const auto iv : swapchain_image_views)
     {
         vkDestroyImageView(logical_device, iv, nullptr);
     }
     vkDestroyPipelineLayout(logical_device, pipeline_layout, nullptr);
     vkDestroyPipeline(logical_device, pipeline, nullptr);
-    vkDestroyRenderPass(logical_device, render_pass, nullptr);
     vkDestroySwapchainKHR(logical_device, swapchain, nullptr);
     vkDestroySurfaceKHR(vk_instance, surface, nullptr);
     vkDestroyDevice(logical_device, nullptr);
