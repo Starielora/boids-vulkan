@@ -18,6 +18,8 @@
 #include <string_view>
 #include <fstream>
 #include <array>
+#include <numbers>
+#include <cmath>
 
 // TODO error message
 #define VK_CHECK(f) do { const auto result = f; if(result != VK_SUCCESS) throw std::runtime_error("");} while(0)
@@ -586,14 +588,14 @@ auto create_graphics_pipelines(VkDevice logical_device, VkExtent2D swapchain_ext
         .flags = 0,
         .depthClampEnable = VK_FALSE,
         .rasterizerDiscardEnable = VK_FALSE,
-        .polygonMode = VK_POLYGON_MODE_FILL,
+        .polygonMode = VK_POLYGON_MODE_LINE,
         .cullMode = VK_CULL_MODE_BACK_BIT,
         .frontFace = VK_FRONT_FACE_CLOCKWISE,
         .depthBiasEnable = VK_FALSE,
         .depthBiasConstantFactor = 0.f,
         .depthBiasClamp = 0.f,
         .depthBiasSlopeFactor = 0.f,
-        .lineWidth = 1.f
+        .lineWidth = 2.f
     };
 
     const auto grid_rasterization_state_create_info = VkPipelineRasterizationStateCreateInfo{
@@ -1222,6 +1224,46 @@ auto pad_uniform_buffer_size(std::size_t original_size, std::size_t min_uniform_
     return aligned_size;
 }
 
+auto generate_cone_vertex_data()
+{
+    constexpr auto base_vertices_count = 12;
+    constexpr auto angle_step = 2 * std::numbers::pi / base_vertices_count;
+
+    auto vertices = std::vector<glm::vec3>(base_vertices_count + 2);
+    vertices[0] = glm::vec3(0, 0, 0);
+    for (std::size_t i = 0; i < base_vertices_count; ++i)
+    {
+        const auto angle = i * angle_step;
+        vertices[i+1] = glm::vec3(std::cos(angle), -2.f, -std::sin(angle));
+    }
+    vertices[vertices.size() - 1] = glm::vec3(0, -2.f, 0);
+
+    const auto triangles_count = base_vertices_count * 2 * 3;
+    auto indices = std::vector<uint16_t>(triangles_count);
+
+    // side triangles
+    for (std::size_t i = 0; i < base_vertices_count; ++i)
+    {
+        indices[3*i] = 0;
+        indices[3*i + 1] = i + 1;
+        indices[3*i + 2] = i + 2;
+    }
+
+    indices[3 * base_vertices_count - 1] = 1;
+
+    // base triangles
+    for (std::size_t i = 0; i < base_vertices_count; ++i)
+    {
+        indices[3*i + 3 * base_vertices_count] = base_vertices_count + 1;
+        indices[3*i + 3 * base_vertices_count + 1] = i + 2;
+        indices[3*i + 3 * base_vertices_count + 2] = i + 1;
+    }
+
+    indices[3 * 2 * base_vertices_count - 2] = 1;
+
+    return std::tuple{ vertices, indices };
+}
+
 int main()
 {
     struct camera_data
@@ -1238,16 +1280,13 @@ int main()
         glm::vec3 color;
     };
 
-    auto triangle_vertex_buffer = std::vector<vertex>{
-        { glm::vec3{ -0.5f, 0.5f, 0.f }, glm::vec3{ 1.f, 0.f, 0.f } },
-        { glm::vec3{ -0.5, -0.5, 0.f }, glm::vec3{ 0.f, 1.f, 0.f } },
-        { glm::vec3{ 0.5, 0.5, 0.f }, glm::vec3{ 0.f, 0.f, 1.f } },
-        { glm::vec3{ 0.5, -0.5, 0.f }, glm::vec3{ 1.f, 1.f, 1.f }}
-    };
+    const auto [triangle_vertices, triangle_index_buffer] = generate_cone_vertex_data();
 
-    auto triangle_index_buffer = std::vector<uint16_t>{
-        0, 1, 2, 1, 3, 2
-    };
+    auto triangle_vertex_buffer = std::vector<vertex>(triangle_vertices.size());
+    for (std::size_t i = 0; i < triangle_vertices.size(); ++i)
+    {
+        triangle_vertex_buffer[i] = { triangle_vertices[i], { 0, 0, 0 } };
+    }
 
     const auto triangle_vertex_buffer_size = triangle_vertex_buffer.size() * sizeof(vertex);
     const auto triangle_index_buffer_size = triangle_index_buffer.size() * sizeof(decltype(triangle_index_buffer)::value_type);
