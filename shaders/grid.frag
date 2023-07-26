@@ -6,7 +6,7 @@ layout(set = 0, binding = 0) uniform CameraData
     mat4 projview;
 } camera_data;
 
-layout(location = 0) out vec4 outColor;
+layout(location = 0) out vec4 out_color;
 layout(location = 0) in vec3 world_pos;
 layout(location = 1) in float grid_size;
 
@@ -17,7 +17,7 @@ void main()
 {
     vec3 dir = world_pos - camera_data.position.xyz;
 
-    float distanceToCamera = length(dir.xz);
+    float distance_to_camera = length(dir.xz);
 
     float x_size = 1.;
     float z_size = x_size;
@@ -33,7 +33,7 @@ void main()
     float valueY = 1.0 - smoothstep(dF.t * thickness, dF.t * (thickness + blendregion), z_step);
     vec3 vertical = vec3(valueX);
     vec3 horizontal = vec3(valueY);
-    float bloom = smoothstep(0.0, 1., distanceToCamera/100.);
+    float bloom = smoothstep(0.0, 1., distance_to_camera/100.);
 
     vec3 color = max(vertical + bloom, horizontal + bloom);
     color *= vec3(0.25,0.25,0.25);
@@ -49,5 +49,5 @@ void main()
     }
     #endif
 
-    outColor = vec4(color, (1. - pow(distanceToCamera/grid_size, 3.0)) * length(color));
+    out_color = vec4(color, (1. - pow(distance_to_camera/grid_size, 3.0)) * length(color));
 }
