@@ -580,7 +580,7 @@ auto create_graphics_pipelines(VkDevice logical_device, VkExtent2D swapchain_ext
         .pScissors = &scissors,
     };
 
-    const auto rasterization_state_create_info = VkPipelineRasterizationStateCreateInfo{
+    const auto triangle_rasterization_state_create_info = VkPipelineRasterizationStateCreateInfo{
         .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
         .pNext = nullptr,
         .flags = 0,
@@ -588,6 +588,22 @@ auto create_graphics_pipelines(VkDevice logical_device, VkExtent2D swapchain_ext
         .rasterizerDiscardEnable = VK_FALSE,
         .polygonMode = VK_POLYGON_MODE_FILL,
         .cullMode = VK_CULL_MODE_BACK_BIT,
+        .frontFace = VK_FRONT_FACE_CLOCKWISE,
+        .depthBiasEnable = VK_FALSE,
+        .depthBiasConstantFactor = 0.f,
+        .depthBiasClamp = 0.f,
+        .depthBiasSlopeFactor = 0.f,
+        .lineWidth = 1.f
+    };
+
+    const auto grid_rasterization_state_create_info = VkPipelineRasterizationStateCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .depthClampEnable = VK_FALSE,
+        .rasterizerDiscardEnable = VK_FALSE,
+        .polygonMode = VK_POLYGON_MODE_FILL,
+        .cullMode = VK_CULL_MODE_NONE,
         .frontFace = VK_FRONT_FACE_CLOCKWISE,
         .depthBiasEnable = VK_FALSE,
         .depthBiasConstantFactor = 0.f,
@@ -757,7 +773,7 @@ auto create_graphics_pipelines(VkDevice logical_device, VkExtent2D swapchain_ext
             .pInputAssemblyState = &input_assembly_create_info,
             .pTessellationState = nullptr,
             .pViewportState = &viewport_state_create_info,
-            .pRasterizationState = &rasterization_state_create_info,
+            .pRasterizationState = &triangle_rasterization_state_create_info,
             .pMultisampleState = &multisample_state_create_info,
             .pDepthStencilState = &depth_stencil_state_create_info,
             .pColorBlendState = &color_blend_state_create_info,
@@ -778,7 +794,7 @@ auto create_graphics_pipelines(VkDevice logical_device, VkExtent2D swapchain_ext
             .pInputAssemblyState = &input_assembly_create_info,
             .pTessellationState = nullptr,
             .pViewportState = &viewport_state_create_info,
-            .pRasterizationState = &rasterization_state_create_info,
+            .pRasterizationState = &grid_rasterization_state_create_info,
             .pMultisampleState = &multisample_state_create_info,
             .pDepthStencilState = &depth_stencil_state_create_info,
             .pColorBlendState = &color_blend_state_create_info,
@@ -1420,16 +1436,16 @@ int main()
 
         vkCmdBeginRenderPass(command_buffer, &render_pass_begin_info, VK_SUBPASS_CONTENTS_INLINE);
 
-        vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, grid_pipeline);
-        vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout, 0, 1, &descriptor_sets[current_frame], 0, nullptr);
-        vkCmdDraw(command_buffer, 6, 1, 0, 0);
-
         vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, triangle_pipeline);
         vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout, 0, 1, &descriptor_sets[current_frame], 0, nullptr);
         const auto offsets = std::array{ VkDeviceSize{ 0 } };
         vkCmdBindVertexBuffers(command_buffer, 0, 1, &vertex_buffer, offsets.data());
         vkCmdBindIndexBuffer(command_buffer, vertex_buffer, triangle_vertex_buffer_size, VK_INDEX_TYPE_UINT16);
         vkCmdDrawIndexed(command_buffer, triangle_index_buffer.size(), 1, 0, 0, 0);
+
+        vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, grid_pipeline);
+        vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout, 0, 1, &descriptor_sets[current_frame], 0, nullptr);
+        vkCmdDraw(command_buffer, 6, 1, 0, 0);
 
         const auto wait_semaphores = std::array{image_available_semaphore};
         const auto wait_stages = VkPipelineStageFlags{VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
