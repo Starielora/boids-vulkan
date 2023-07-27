@@ -285,6 +285,9 @@ auto create_logical_device(VkPhysicalDevice physical_device, uint32_t queue_fami
         .queueCount = 1, // one queue should be sufficient for now
         .pQueuePriorities = &queue_prio
     };
+    auto features = VkPhysicalDeviceFeatures{};
+    features.fillModeNonSolid = VK_TRUE;
+    features.wideLines = VK_TRUE;
 
     const auto create_info = VkDeviceCreateInfo{
         .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
@@ -296,7 +299,7 @@ auto create_logical_device(VkPhysicalDevice physical_device, uint32_t queue_fami
         .ppEnabledLayerNames = nullptr, // deprecated + ignored 
         .enabledExtensionCount = static_cast<uint32_t>(device_extensions.size()),
         .ppEnabledExtensionNames = device_extensions.data(),
-        .pEnabledFeatures = nullptr // not required atm
+        .pEnabledFeatures = &features
     };
     auto device = VkDevice{ 0 };
 
