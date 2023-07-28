@@ -4,7 +4,9 @@
 #define VK_NO_PROTOTYPES
 #include <Volk/volk.h>
 #include <GLFW/glfw3.h>
-
+#include <imgui.h>
+#include <imgui_impl_glfw.h>
+#include <imgui_impl_vulkan.h>
 #include <glm/glm.hpp>
 
 #include <spdlog/spdlog.h>
@@ -28,6 +30,8 @@ constexpr auto depth_format = VK_FORMAT_D32_SFLOAT; // TODO query device support
 constexpr auto msaa_samples = VK_SAMPLE_COUNT_8_BIT; // TODO query device
 
 camera g_camera;
+bool g_gui_mode = false;
+glm::vec2 gui_mode_mouse_pos{};
 
 auto read_file(const std::string_view filename)
 {
@@ -43,7 +47,34 @@ auto read_file(const std::string_view filename)
 
 void mouse_callback(GLFWwindow* window, double x, double y)
 {
-    g_camera.look_around({ x, y });
+    if (!g_gui_mode)
+    {
+        g_camera.look_around({ x, y });
+    }
+}
+void key_callback(GLFWwindow* window, int key, int scancode, int action, int mods)
+{
+    if (key == GLFW_KEY_F && action == GLFW_RELEASE)
+    {
+        // TODO this impl is buggy when pressing key while moving mouse
+        g_gui_mode = !g_gui_mode;
+        if (g_gui_mode)
+        {
+            double x, y;
+            glfwGetCursorPos(window, &x, &y);
+            gui_mode_mouse_pos = { x, y };
+            int w, h;
+            glfwGetWindowSize(window, &w, &h);
+            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+            glfwSetCursorPos(window, w / 2, h / 2);
+        }
+        else
+        {
+            glfwSetCursorPos(window, gui_mode_mouse_pos.x, gui_mode_mouse_pos.y);
+            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+        }
+
+    }
 }
 
 auto create_glfw_window()
@@ -56,6 +87,7 @@ auto create_glfw_window()
     assert(window);
 
     glfwSetCursorPosCallback(window, mouse_callback);
+    glfwSetKeyCallback(window, key_callback);
     glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
 
     return window;
@@ -1248,13 +1280,15 @@ auto create_descriptor_pool(VkDevice logical_device)
         .descriptorCount = 2
     };
 
+    const auto pool_sizes = std::array { pool_size };
+
     const auto create_info = VkDescriptorPoolCreateInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
         .pNext = nullptr,
         .flags = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT,
         .maxSets = 2,
-        .poolSizeCount = 1,
-        .pPoolSizes = &pool_size
+        .poolSizeCount = pool_sizes.size(),
+        .pPoolSizes = pool_sizes.data()
     };
 
     auto pool = VkDescriptorPool{};
@@ -1360,6 +1394,119 @@ auto generate_cone_vertex_data()
     return std::tuple{ vertices, indices };
 }
 
+namespace imgui
+{
+    auto create_descriptor_pool(VkDevice logical_device)
+    {
+        // from imgui vulkan_glfw example
+        // this is far too much, I reckon
+        const auto pool_sizes = std::array {
+            VkDescriptorPoolSize{ VK_DESCRIPTOR_TYPE_SAMPLER, 1000 },
+            VkDescriptorPoolSize{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1000 },
+            VkDescriptorPoolSize{ VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1000 },
+            VkDescriptorPoolSize{ VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1000 },
+            VkDescriptorPoolSize{ VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER, 1000 },
+            VkDescriptorPoolSize{ VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER, 1000 },
+            VkDescriptorPoolSize{ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1000 },
+            VkDescriptorPoolSize{ VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1000 },
+            VkDescriptorPoolSize{ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1000 },
+            VkDescriptorPoolSize{ VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC, 1000 },
+            VkDescriptorPoolSize{ VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, 1000 }
+        };
+
+        const auto create_info = VkDescriptorPoolCreateInfo{
+            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT,
+            .maxSets = 1000,
+            .poolSizeCount = pool_sizes.size(),
+            .pPoolSizes = pool_sizes.data()
+        };
+
+        auto pool = VkDescriptorPool{};
+        VK_CHECK(vkCreateDescriptorPool(logical_device, &create_info, nullptr, &pool));
+        return pool;
+    }
+
+    auto init(GLFWwindow* window, VkInstance vk_instance, VkDevice logical_device, VkPhysicalDevice physical_device, uint32_t queue_family_index, VkQueue queue, uint32_t images_count, VkRenderPass render_pass, VkSurfaceKHR surface, VkSurfaceFormatKHR surface_format, VkSwapchainKHR swapchain, VkCommandPool command_pool, VkCommandBuffer command_buffer)
+    {
+        const auto descriptor_pool = imgui::create_descriptor_pool(logical_device);
+
+        // imgui
+        IMGUI_CHECKVERSION();
+        ImGui::CreateContext();
+        ImGuiIO& io = ImGui::GetIO(); (void)io;
+
+        ImGui::StyleColorsDark();
+        ImGui_ImplGlfw_InitForVulkan(window, true);
+        // TODO this is because of volk - https://github.com/ocornut/imgui/issues/4854 https://github.com/ocornut/imgui/pull/6582
+        ImGui_ImplVulkan_LoadFunctions([](const char* function_name, void* vulkan_instance) { return vkGetInstanceProcAddr(*(reinterpret_cast<VkInstance*>(vulkan_instance)), function_name); }, &vk_instance);
+        ImGui_ImplVulkan_InitInfo init_info = {};
+        init_info.Instance = vk_instance;
+        init_info.PhysicalDevice = physical_device;
+        init_info.Device = logical_device;
+        init_info.QueueFamily = queue_family_index;
+        init_info.Queue = queue;
+        //init_info.PipelineCache = VK_NULL_HANDLE;
+        init_info.DescriptorPool = descriptor_pool;
+        init_info.Subpass = 0;
+        init_info.MinImageCount = images_count,
+        init_info.ImageCount = images_count,
+        init_info.MSAASamples = msaa_samples;
+        init_info.Allocator = nullptr;
+        init_info.CheckVkResultFn = [](VkResult r) { VK_CHECK(r); };
+        ImGui_ImplVulkan_Init(&init_info, render_pass);
+
+        auto imgui_vulkan_window = ImGui_ImplVulkanH_Window();
+        imgui_vulkan_window.Surface = surface;
+        imgui_vulkan_window.SurfaceFormat = surface_format;
+        imgui_vulkan_window.PresentMode = VK_PRESENT_MODE_MAILBOX_KHR;
+        imgui_vulkan_window.Swapchain = swapchain;
+
+        {
+            // Use any command queue
+            VK_CHECK(vkResetCommandPool(logical_device, command_pool, 0));
+            VkCommandBufferBeginInfo begin_info = {};
+            begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+            begin_info.flags |= VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+            VK_CHECK(vkBeginCommandBuffer(command_buffer, &begin_info));
+
+            ImGui_ImplVulkan_CreateFontsTexture(command_buffer);
+
+            VkSubmitInfo end_info = {};
+            end_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+            end_info.commandBufferCount = 1;
+            end_info.pCommandBuffers = &command_buffer;
+            VK_CHECK(vkEndCommandBuffer(command_buffer));
+            VK_CHECK(vkQueueSubmit(queue, 1, &end_info, VK_NULL_HANDLE));
+            VK_CHECK(vkDeviceWaitIdle(logical_device));
+            ImGui_ImplVulkan_DestroyFontUploadObjects();
+        }
+
+        return std::tuple{descriptor_pool, imgui_vulkan_window};
+    }
+
+    void cleanup()
+    {
+        ImGui_ImplVulkan_Shutdown();
+        ImGui_ImplGlfw_Shutdown();
+        ImGui::DestroyContext();
+    }
+
+    void draw_ui(VkCommandBuffer command_buffer)
+    {
+        ImGui_ImplVulkan_NewFrame();
+        ImGui_ImplGlfw_NewFrame();
+        ImGui::NewFrame();
+
+        ImGui::ShowDemoWindow();
+
+        ImGui::Render();
+        ImDrawData* draw_data = ImGui::GetDrawData();
+        ImGui_ImplVulkan_RenderDrawData(draw_data, command_buffer);
+    }
+}
+
 int main()
 {
     struct camera_data
@@ -1416,7 +1563,7 @@ int main()
     auto requested_extensions = std::vector<const char*>(glfw_extensions, glfw_extensions + glfw_extensions_count);
     requested_extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
 
-    const auto vk_instance = create_vulkan_instance(requested_instance_layers, requested_extensions);
+    auto vk_instance = create_vulkan_instance(requested_instance_layers, requested_extensions);
     volkLoadInstance(vk_instance);
 
     auto surface = VkSurfaceKHR{ 0 };
@@ -1478,6 +1625,8 @@ int main()
     const auto image_available_semaphores = create_semaphores(logical_device, max_frames_in_flight);
     const auto rendering_finished_semaphores = create_semaphores(logical_device, max_frames_in_flight);
     const auto in_flight_fences = create_fences(logical_device, max_frames_in_flight);
+
+    const auto [imgui_descriptor_pool, imgui_vk_window] = imgui::init(window, vk_instance, logical_device, physical_device, queue_family_index, present_queue, max_frames_in_flight, render_pass, surface, surface_format, swapchain, command_pool, command_buffers[0]);
 
     spdlog::trace("Entering main loop.");
     auto current_frame = uint32_t{ 0 };
@@ -1591,6 +1740,8 @@ int main()
         vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout, 0, 1, &descriptor_sets[current_frame], 0, nullptr);
         vkCmdDraw(command_buffer, 6, 1, 0, 0);
 
+        imgui::draw_ui(command_buffer);
+
         const auto wait_semaphores = std::array{image_available_semaphore};
         const auto wait_stages = VkPipelineStageFlags{VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
         const auto signal_semaphores = std::array{rendering_finished_semaphore};
@@ -1632,6 +1783,9 @@ int main()
 
     spdlog::trace("Cleanup.");
 
+    imgui::cleanup();
+
+    vkDestroyDescriptorPool(logical_device, imgui_descriptor_pool, nullptr);
     vkDestroyDescriptorPool(logical_device, descriptor_pool, nullptr);
     vkDestroyDescriptorSetLayout(logical_device, camera_data_descriptor_set_layout, nullptr);
     vkDestroyBuffer(logical_device, camera_data_buffer, nullptr);

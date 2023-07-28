@@ -9,7 +9,7 @@ project(boids-vulkan)
 
     add_executable(boids main.cpp camera.hpp)
 
-    target_link_libraries(boids PRIVATE volk glm glfw spdlog::spdlog)
+    target_link_libraries(boids PRIVATE volk glm glfw spdlog::spdlog imgui)
 
     add_dependencies(boids shaders)
 
