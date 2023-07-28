@@ -24,7 +24,8 @@
 // TODO error message
 #define VK_CHECK(f) do { const auto result = f; if(result != VK_SUCCESS) throw std::runtime_error("");} while(0)
 constexpr bool VALIDATION_LAYERS = true;
-constexpr auto depth_format = VK_FORMAT_D32_SFLOAT;
+constexpr auto depth_format = VK_FORMAT_D32_SFLOAT; // TODO query device support
+constexpr auto msaa_samples = VK_SAMPLE_COUNT_8_BIT; // TODO query device
 
 camera g_camera;
 
@@ -621,7 +622,7 @@ auto create_graphics_pipelines(VkDevice logical_device, VkExtent2D swapchain_ext
         .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
         .pNext = nullptr,
         .flags = 0,
-        .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT,
+        .rasterizationSamples = msaa_samples,
         .sampleShadingEnable = VK_FALSE,
         .minSampleShading = 1.f,
         .pSampleMask = nullptr,
@@ -686,19 +687,19 @@ auto create_graphics_pipelines(VkDevice logical_device, VkExtent2D swapchain_ext
     const auto color_attachment = VkAttachmentDescription{
         .flags = 0,
         .format = swapchain_format,
-        .samples = VK_SAMPLE_COUNT_1_BIT,
+        .samples = msaa_samples,
         .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
         .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
         .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
         .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
         .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-        .finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR
+        .finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
     };
 
     const auto depth_attachment = VkAttachmentDescription{
         .flags = 0,
         .format = depth_format,
-        .samples = VK_SAMPLE_COUNT_1_BIT,
+        .samples = msaa_samples,
         .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
         .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
         .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
@@ -707,7 +708,19 @@ auto create_graphics_pipelines(VkDevice logical_device, VkExtent2D swapchain_ext
         .finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
     };
 
-    const auto attachmentRef = VkAttachmentReference{
+    const auto color_resolve_attachment = VkAttachmentDescription{
+        .flags = 0,
+        .format = swapchain_format,
+        .samples = VK_SAMPLE_COUNT_1_BIT,
+        .loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+        .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+        .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+        .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+        .finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR
+    };
+
+    const auto attachment_ref = VkAttachmentReference{
         .attachment = 0,
         .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
     };
@@ -717,14 +730,19 @@ auto create_graphics_pipelines(VkDevice logical_device, VkExtent2D swapchain_ext
         .layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
     };
 
+    const auto color_resolve_reference = VkAttachmentReference{
+        .attachment = 2,
+        .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
+    };
+
     const auto subpass = VkSubpassDescription{
         .flags = 0,
         .pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
         .inputAttachmentCount = 0,
         .pInputAttachments = nullptr,
         .colorAttachmentCount = 1,
-        .pColorAttachments = &attachmentRef,
-        .pResolveAttachments = 0,
+        .pColorAttachments = &attachment_ref,
+        .pResolveAttachments = &color_resolve_reference,
         .pDepthStencilAttachment = &depth_attachment_reference,
         .preserveAttachmentCount = 0,
         .pPreserveAttachments = nullptr
@@ -751,7 +769,7 @@ auto create_graphics_pipelines(VkDevice logical_device, VkExtent2D swapchain_ext
         },
     };
 
-    const auto attachments = std::array{ color_attachment, depth_attachment };
+    const auto attachments = std::array{ color_attachment, depth_attachment, color_resolve_attachment };
     const auto render_pass_create_info = VkRenderPassCreateInfo{
         .sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
         .pNext = nullptr,
@@ -823,7 +841,7 @@ auto create_graphics_pipelines(VkDevice logical_device, VkExtent2D swapchain_ext
     return std::tuple{pipelines[0], pipelines[1], pipeline_layout, render_pass};
 }
 
-auto create_swapchain_framebuffers(VkDevice logical_device, VkRenderPass render_pass, const std::vector<VkImageView>& swapchain_imageviews, const std::vector<VkImageView> depth_image_views, VkExtent2D swapchain_extent)
+auto create_swapchain_framebuffers(VkDevice logical_device, VkRenderPass render_pass, const std::vector<VkImageView>& color_imageviews, const std::vector<VkImageView>& swapchain_imageviews, const std::vector<VkImageView> depth_image_views, VkExtent2D swapchain_extent)
 {
     assert(swapchain_imageviews.size() == depth_image_views.size());
 
@@ -831,7 +849,7 @@ auto create_swapchain_framebuffers(VkDevice logical_device, VkRenderPass render_
 
     for (std::size_t i = 0; i < swapchain_imageviews.size(); ++i)
     {
-        const auto attachments = std::array{ swapchain_imageviews[i], depth_image_views[i] };
+        const auto attachments = std::array{ color_imageviews[i], depth_image_views[i], swapchain_imageviews[i] };
         const auto create_info = VkFramebufferCreateInfo{
             .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
             .pNext = nullptr,
@@ -924,6 +942,76 @@ auto create_fences(VkDevice logical_device, uint32_t count)
     return fences;
 }
 
+auto create_color_image(VkDevice logical_device, VkFormat swapchain_format, VkExtent2D swapchain_extent)
+{
+        const auto create_info = VkImageCreateInfo{
+            .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .imageType = VK_IMAGE_TYPE_2D,
+            .format = swapchain_format,
+            .extent = VkExtent3D{
+                .width = swapchain_extent.width,
+                .height = swapchain_extent.height,
+                .depth = 1
+            },
+            .mipLevels = 1,
+            .arrayLayers = 1,
+            .samples = msaa_samples,
+            .tiling = VK_IMAGE_TILING_OPTIMAL,
+            .usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+            .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+            .queueFamilyIndexCount = 0,
+            .pQueueFamilyIndices = nullptr,
+            .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED
+        };
+
+        auto image = VkImage{};
+        VK_CHECK(vkCreateImage(logical_device, &create_info, nullptr, &image));
+
+        auto memory_requirements = VkMemoryRequirements{};
+        vkGetImageMemoryRequirements(logical_device, image, &memory_requirements);
+
+        return std::tuple{image, memory_requirements};
+}
+
+auto create_color_image_views(VkDevice logical_device, VkFormat swapchain_format, std::vector<VkImage> images)
+{
+    auto views = std::vector<VkImageView>(images.size());
+
+    for (std::size_t i = 0; i < images.size(); ++i)
+    {
+        const auto create_info = VkImageViewCreateInfo{
+            .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .image = images[i],
+            .viewType = VK_IMAGE_VIEW_TYPE_2D,
+            .format = swapchain_format,
+            .components = VkComponentMapping{
+                .r = VK_COMPONENT_SWIZZLE_IDENTITY,
+                .g = VK_COMPONENT_SWIZZLE_IDENTITY,
+                .b = VK_COMPONENT_SWIZZLE_IDENTITY,
+                .a = VK_COMPONENT_SWIZZLE_IDENTITY,
+            },
+            .subresourceRange = VkImageSubresourceRange{
+                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                .baseMipLevel = 0,
+                .levelCount = 1,
+                .baseArrayLayer = 0,
+                .layerCount = 1
+            }
+        };
+
+        auto view = VkImageView{};
+        VK_CHECK(vkCreateImageView(logical_device, &create_info, nullptr, &view));
+
+        views[i] = view;
+    }
+
+    return views;
+}
+
 namespace depth
 {
     auto create_image(VkDevice logical_device, VkExtent2D swapchain_extent)
@@ -941,7 +1029,7 @@ namespace depth
             },
             .mipLevels = 1,
             .arrayLayers = 1,
-            .samples = VK_SAMPLE_COUNT_1_BIT,
+            .samples = msaa_samples,
             .tiling = VK_IMAGE_TILING_OPTIMAL,
             .usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
             .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
@@ -1043,13 +1131,18 @@ auto recreate_graphics_pipeline_and_swapchain(GLFWwindow* window, VkDevice logic
     const auto [swapchain, surface_format] = create_swapchain(logical_device, physical_device, surface, queue_family_index, glfw_extent);
     const auto [swapchain_images, swapchain_image_views] = get_swapchain_images(logical_device, swapchain, surface_format.format);
 
+    auto [color_image, color_image_mem_reqs] = create_color_image(logical_device, swapchain_format, glfw_extent);
+    auto color_image_memory = allocate_memory(logical_device, color_image_mem_reqs.size, find_memory_type_index(physical_device, color_image_mem_reqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT));
+    VK_CHECK(vkBindImageMemory(logical_device, color_image, color_image_memory, 0));
+    auto color_image_views = create_color_image_views(logical_device, swapchain_format, { color_image });
+
     auto [depth_image, depth_image_mem_reqs] = depth::create_image(logical_device, glfw_extent);
     auto depth_image_memory = allocate_memory(logical_device, depth_image_mem_reqs.size, find_memory_type_index(physical_device, depth_image_mem_reqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT));
     VK_CHECK(vkBindImageMemory(logical_device, depth_image, depth_image_memory, 0));
     auto depth_image_views = depth::create_image_views(logical_device, { depth_image } );
-    const auto swapchain_framebuffers = create_swapchain_framebuffers(logical_device, render_pass, swapchain_image_views, depth_image_views, glfw_extent);
+    const auto swapchain_framebuffers = create_swapchain_framebuffers(logical_device, render_pass, color_image_views, swapchain_image_views, depth_image_views, glfw_extent);
 
-    return std::tuple{triangle_pipeline, grid_pipeline, pipeline_layout, glfw_extent, swapchain, surface_format, swapchain_images, swapchain_image_views, render_pass, swapchain_framebuffers, depth_image, depth_image_views, depth_image_memory};
+    return std::tuple{triangle_pipeline, grid_pipeline, pipeline_layout, glfw_extent, swapchain, surface_format, swapchain_images, swapchain_image_views, render_pass, swapchain_framebuffers, color_image, color_image_memory, color_image_views, depth_image, depth_image_views, depth_image_memory};
 }
 
 void handle_keyboard(GLFWwindow* window, camera& camera)
@@ -1361,13 +1454,16 @@ int main()
     VK_CHECK(vkBindBufferMemory(logical_device, camera_data_buffer, camera_data_memory, 0));
     VK_CHECK(vkMapMemory(logical_device, camera_data_memory, 0, VK_WHOLE_SIZE, 0, &camera_data_memory_ptr));
 
-    assert(swapchain_image_views.size() == 1); // I just want to get depth buffer done atm
+    auto [color_image, color_image_mem_reqs] = create_color_image(logical_device, surface_format.format, glfw_extent);
+    auto color_image_memory = allocate_memory(logical_device, color_image_mem_reqs.size, find_memory_type_index(physical_device, color_image_mem_reqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT));
+    VK_CHECK(vkBindImageMemory(logical_device, color_image, color_image_memory, 0));
+    auto color_image_views = create_color_image_views(logical_device, surface_format.format, { color_image });
 
     auto [depth_image, depth_image_mem_reqs] = depth::create_image(logical_device, glfw_extent);
     auto depth_image_memory = allocate_memory(logical_device, depth_image_mem_reqs.size, find_memory_type_index(physical_device, depth_image_mem_reqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT));
     VK_CHECK(vkBindImageMemory(logical_device, depth_image, depth_image_memory, 0));
     auto depth_image_views = depth::create_image_views(logical_device, { depth_image } );
-    auto swapchain_framebuffers = create_swapchain_framebuffers(logical_device, render_pass, swapchain_image_views, depth_image_views, glfw_extent);
+    auto swapchain_framebuffers = create_swapchain_framebuffers(logical_device, render_pass, color_image_views, swapchain_image_views, depth_image_views, glfw_extent);
     const auto command_pool = create_command_pool(logical_device, queue_family_index);
 
     const auto command_buffers = create_command_buffers(logical_device, command_pool, max_frames_in_flight);
@@ -1413,8 +1509,14 @@ int main()
                 {
                     vkDestroyImageView(logical_device, iv, nullptr);
                 }
+                vkFreeMemory(logical_device, color_image_memory, nullptr);
                 vkFreeMemory(logical_device, depth_image_memory, nullptr);
+                vkDestroyImage(logical_device, color_image, nullptr);
                 vkDestroyImage(logical_device, depth_image, nullptr);
+                for (const auto& iv : color_image_views)
+                {
+                    vkDestroyImageView(logical_device, iv, nullptr);
+                }
                 for (const auto& iv : depth_image_views)
                 {
                     vkDestroyImageView(logical_device, iv, nullptr);
@@ -1423,7 +1525,7 @@ int main()
                 vkDestroyPipelineLayout(logical_device, pipeline_layout, nullptr);
                 vkDestroyPipeline(logical_device, triangle_pipeline, nullptr);
                 vkDestroyPipeline(logical_device, grid_pipeline, nullptr);
-                std::tie(triangle_pipeline, grid_pipeline, pipeline_layout, glfw_extent, swapchain, surface_format, swapchain_images, swapchain_image_views, render_pass, swapchain_framebuffers, depth_image, depth_image_views, depth_image_memory) = recreate_graphics_pipeline_and_swapchain(window, logical_device, physical_device, surface, queue_family_index, surface_format.format, camera_data_descriptor_set_layout);
+                std::tie(triangle_pipeline, grid_pipeline, pipeline_layout, glfw_extent, swapchain, surface_format, swapchain_images, swapchain_image_views, render_pass, swapchain_framebuffers, color_image, color_image_memory, color_image_views, depth_image, depth_image_views, depth_image_memory) = recreate_graphics_pipeline_and_swapchain(window, logical_device, physical_device, surface, queue_family_index, surface_format.format, camera_data_descriptor_set_layout);
                 continue;
             }
             else if (result != VK_SUCCESS)
@@ -1553,8 +1655,14 @@ int main()
     {
         vkDestroyFramebuffer(logical_device, fb, nullptr);
     }
+    vkFreeMemory(logical_device, color_image_memory, nullptr);
     vkFreeMemory(logical_device, depth_image_memory, nullptr);
+    vkDestroyImage(logical_device, color_image, nullptr);
     vkDestroyImage(logical_device, depth_image, nullptr);
+    for (const auto& iv : color_image_views)
+    {
+        vkDestroyImageView(logical_device, iv, nullptr);
+    }
     for (const auto& iv : depth_image_views)
     {
         vkDestroyImageView(logical_device, iv, nullptr);

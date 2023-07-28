@@ -38,16 +38,39 @@ void main()
     vec3 color = max(vertical + bloom, horizontal + bloom);
     color *= vec3(0.25,0.25,0.25);
 
+    const float alpha = (1. - pow(distance_to_camera/grid_size, 3.0)) * length(color);
+    out_color = vec4(color, alpha);
+
     #ifdef AXIS
-    if (length(world_pos * vec3(0., 1., 1.)) < 0.04)
+    const vec3 red = vec3(1.0, 0.0, 0.0);
+    const vec3 blue = vec3(0.0, 0.0, 1.0);
+    float length_yz = length(world_pos * vec3(0., 1., 1.));
+    float length_xy = length(world_pos * vec3(1., 1., 0.));
+
+    // poor man's AA
+    // good enough for now...
+    // TODO make axis fade away in distance and maybe research how to make it better overall
+    const float line_width = mix(0.04, 0.32, distance_to_camera/grid_size);
+    const float aa_width = mix(0.002, 0.32, distance_to_camera/grid_size);
+    vec4 red_line = vec4(red, smoothstep(line_width, line_width - aa_width, length_yz));
+    vec4 blue_line = vec4(blue, smoothstep(line_width, line_width - aa_width, length_xy));
+    if (length_yz < line_width)
     {
-        color = vec3(1.0, 0.0, 0.0);
+        const float s = smoothstep(line_width - aa_width, line_width, length_yz);
+        vec4 redblue_lines = mix(red_line, blue_line, s);
+        if (length_xy < line_width)
+        {
+            out_color = redblue_lines;
+        }
+        else
+        {
+            out_color = mix(redblue_lines, out_color, s);
+        }
     }
-    else if (length(world_pos * vec3(1., 1., 0.)) < 0.04)
+    else if (length_xy < line_width)
     {
-        color = vec3(0.0, 0.0, 1.0);
+        const float s = smoothstep(line_width - aa_width, line_width, length_xy);
+        out_color = mix(blue_line, out_color, s);
     }
     #endif
-
-    out_color = vec4(color, (1. - pow(distance_to_camera/grid_size, 3.0)) * length(color));
 }
