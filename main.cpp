@@ -102,7 +102,7 @@ namespace window
         }
     }
 
-    auto create()
+    auto create(decltype(cleanup::general_queue)& cleanup_queue)
     {
         spdlog::trace("Create glfw window.");
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
@@ -114,6 +114,11 @@ namespace window
         glfwSetCursorPosCallback(window, mouse_callback);
         glfwSetKeyCallback(window, key_callback);
         glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+
+        cleanup_queue.push([window]() {
+            glfwDestroyWindow(window);
+            glfwTerminate();
+        });
 
         return window;
     }
@@ -140,12 +145,6 @@ namespace window
         int glfw_fb_extent_width, glfw_fb_extent_height;
         glfwGetFramebufferSize(window, &glfw_fb_extent_width, &glfw_fb_extent_height);
         return VkExtent2D{ static_cast<uint32_t>(glfw_fb_extent_width), static_cast<uint32_t>(glfw_fb_extent_height) };
-    }
-
-    void cleanup(GLFWwindow* window)
-    {
-        glfwDestroyWindow(window);
-        glfwTerminate();
     }
 }
 
@@ -1533,13 +1532,12 @@ namespace gui
             VK_CHECK(vkDeviceWaitIdle(logical_device));
             ImGui_ImplVulkan_DestroyFontUploadObjects();
         }
-    }
 
-    void cleanup()
-    {
-        ImGui_ImplVulkan_Shutdown();
-        ImGui_ImplGlfw_Shutdown();
-        ImGui::DestroyContext();
+        cleanup_queue.push([]() {
+            ImGui_ImplVulkan_Shutdown();
+            ImGui_ImplGlfw_Shutdown();
+            ImGui::DestroyContext();
+        });
     }
 
     void draw(VkCommandBuffer command_buffer)
@@ -1615,7 +1613,7 @@ int main()
     const auto glfw_initialized = glfwInit();
     assert(glfw_initialized == GLFW_TRUE);
 
-    const auto window = window::create();
+    const auto window = window::create(cleanup::general_queue);
 
     const auto requested_instance_layers = VALIDATION_LAYERS ? std::vector<const char*>{ "VK_LAYER_KHRONOS_validation" } : std::vector<const char*>{};
     const auto required_device_extensions = std::vector<const char*>{ VK_KHR_SWAPCHAIN_EXTENSION_NAME };
@@ -1824,10 +1822,6 @@ int main()
 
     spdlog::trace("Cleanup.");
 
-    gui::cleanup();
-
     cleanup::flush(cleanup::swapchain_queue);
     cleanup::flush(cleanup::general_queue);
-
-    window::cleanup(window);
 }
