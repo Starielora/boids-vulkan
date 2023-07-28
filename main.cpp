@@ -22,6 +22,7 @@
 #include <array>
 #include <numbers>
 #include <cmath>
+#include <stack>
 
 // TODO error message
 #define VK_CHECK(f) do { const auto result = f; if(result != VK_SUCCESS) throw std::runtime_error("");} while(0)
@@ -32,6 +33,27 @@ constexpr auto msaa_samples = VK_SAMPLE_COUNT_8_BIT; // TODO query device
 camera g_camera;
 bool g_gui_mode = false;
 glm::vec2 gui_mode_mouse_pos{};
+
+namespace cleanup
+{
+    auto general_queue = std::stack<std::function<void()>>();
+    auto swapchain_queue = std::stack<std::function<void()>>();
+
+    void flush(decltype(general_queue)& queue)
+    {
+        while (!queue.empty())
+        {
+            queue.top()();
+            queue.pop();
+        }
+    }
+}
+
+struct vertex
+{
+    glm::vec3 pos;
+    glm::vec3 color;
+};
 
 auto read_file(const std::string_view filename)
 {
@@ -45,52 +67,86 @@ auto read_file(const std::string_view filename)
     return std::vector<char>(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
 }
 
-void mouse_callback(GLFWwindow* window, double x, double y)
+namespace window
 {
-    if (!g_gui_mode)
+    void mouse_callback(GLFWwindow* window, double x, double y)
     {
-        g_camera.look_around({ x, y });
+        if (!g_gui_mode)
+        {
+            g_camera.look_around({ x, y });
+        }
     }
-}
-void key_callback(GLFWwindow* window, int key, int scancode, int action, int mods)
-{
-    if (key == GLFW_KEY_F && action == GLFW_RELEASE)
+
+    void key_callback(GLFWwindow* window, int key, int scancode, int action, int mods)
     {
-        // TODO this impl is buggy when pressing key while moving mouse
-        g_gui_mode = !g_gui_mode;
-        if (g_gui_mode)
+        if (key == GLFW_KEY_F && action == GLFW_RELEASE)
         {
-            double x, y;
-            glfwGetCursorPos(window, &x, &y);
-            gui_mode_mouse_pos = { x, y };
-            int w, h;
-            glfwGetWindowSize(window, &w, &h);
-            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
-            glfwSetCursorPos(window, w / 2, h / 2);
-        }
-        else
-        {
-            glfwSetCursorPos(window, gui_mode_mouse_pos.x, gui_mode_mouse_pos.y);
-            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
-        }
+            // TODO this impl is buggy when pressing key while moving mouse
+            g_gui_mode = !g_gui_mode;
+            if (g_gui_mode)
+            {
+                double x, y;
+                glfwGetCursorPos(window, &x, &y);
+                gui_mode_mouse_pos = { x, y };
+                int w, h;
+                glfwGetWindowSize(window, &w, &h);
+                glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+                glfwSetCursorPos(window, w / 2, h / 2);
+            }
+            else
+            {
+                glfwSetCursorPos(window, gui_mode_mouse_pos.x, gui_mode_mouse_pos.y);
+                glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+            }
 
+        }
     }
-}
 
-auto create_glfw_window()
-{
-    spdlog::trace("Create glfw window.");
-    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-    glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
+    auto create()
+    {
+        spdlog::trace("Create glfw window.");
+        glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+        glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
 
-    const auto window = glfwCreateWindow(800, 600, "boids", nullptr, nullptr);
-    assert(window);
+        const auto window = glfwCreateWindow(800, 600, "boids", nullptr, nullptr);
+        assert(window);
 
-    glfwSetCursorPosCallback(window, mouse_callback);
-    glfwSetKeyCallback(window, key_callback);
-    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+        glfwSetCursorPosCallback(window, mouse_callback);
+        glfwSetKeyCallback(window, key_callback);
+        glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
 
-    return window;
+        return window;
+    }
+
+    auto get_vk_extensions()
+    {
+        auto glfw_extensions_count = uint32_t{ 0 };
+        const auto** glfw_extensions = glfwGetRequiredInstanceExtensions(&glfw_extensions_count);
+        return std::vector<const char*>(glfw_extensions, glfw_extensions + glfw_extensions_count);
+    }
+
+    auto create_vk_surface(VkInstance vk_instance, GLFWwindow* window, decltype(cleanup::general_queue)& cleanup_queue)
+    {
+        auto surface = VkSurfaceKHR{ 0 };
+        VK_CHECK(glfwCreateWindowSurface(vk_instance, window, nullptr, &surface));
+
+        cleanup_queue.push([vk_instance, surface]() { vkDestroySurfaceKHR(vk_instance, surface, nullptr); });
+
+        return surface;
+    }
+
+    auto get_extent(GLFWwindow* window)
+    {
+        int glfw_fb_extent_width, glfw_fb_extent_height;
+        glfwGetFramebufferSize(window, &glfw_fb_extent_width, &glfw_fb_extent_height);
+        return VkExtent2D{ static_cast<uint32_t>(glfw_fb_extent_width), static_cast<uint32_t>(glfw_fb_extent_height) };
+    }
+
+    void cleanup(GLFWwindow* window)
+    {
+        glfwDestroyWindow(window);
+        glfwTerminate();
+    }
 }
 
 VkBool32 debug_callback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity, VkDebugUtilsMessageTypeFlagsEXT messageTypes, const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData, void* pUserData)
@@ -144,7 +200,7 @@ VkBool32 debug_callback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity, 
     return VK_FALSE;
 }
 
-static const auto debug_utils_messenger_create_info = VkDebugUtilsMessengerCreateInfoEXT{
+constexpr auto debug_utils_messenger_create_info = VkDebugUtilsMessengerCreateInfoEXT{
     .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT,
     .pNext = nullptr,
     .flags = 0,
@@ -154,7 +210,15 @@ static const auto debug_utils_messenger_create_info = VkDebugUtilsMessengerCreat
     .pUserData = nullptr
 };
 
-auto create_vulkan_instance(const std::vector<const char*>& layers, const std::vector<const char*>& extensions)
+auto create_debug_utils_messenger(VkInstance vk_instance, decltype(cleanup::general_queue)& cleanup_queue)
+{
+    auto debug_messenger = VkDebugUtilsMessengerEXT{ 0 };
+    VK_CHECK(vkCreateDebugUtilsMessengerEXT(vk_instance, &debug_utils_messenger_create_info, nullptr, &debug_messenger));
+
+    cleanup_queue.push([vk_instance, debug_messenger]() { vkDestroyDebugUtilsMessengerEXT(vk_instance, debug_messenger, nullptr); });
+}
+
+auto create_vulkan_instance(const std::vector<const char*>& layers, const std::vector<const char*>& extensions, decltype(cleanup::general_queue)& cleanup_queue)
 {
     spdlog::trace("Create vulkan instance.");
     assert(layers.size() < std::numeric_limits<uint32_t>::max());
@@ -184,6 +248,8 @@ auto create_vulkan_instance(const std::vector<const char*>& layers, const std::v
     };
 
     VK_CHECK(vkCreateInstance(&create_info, nullptr, &instance));
+
+    cleanup_queue.push([instance]() { vkDestroyInstance(instance, nullptr); });
 
     return instance;
 }
@@ -307,7 +373,7 @@ auto pick_physical_device(VkInstance instance, VkSurfaceKHR surface, const std::
     throw std::runtime_error("No suitable physical device found. Revisit device suitability logic");
 }
 
-auto create_logical_device(VkPhysicalDevice physical_device, uint32_t queue_family_index, const std::vector<const char*>& device_extensions)
+auto create_logical_device(VkPhysicalDevice physical_device, uint32_t queue_family_index, const std::vector<const char*>& device_extensions, decltype(cleanup::general_queue)& cleanup_queue)
 {
     const auto queue_prio = 1.f;
     const auto queue_create_info = VkDeviceQueueCreateInfo{
@@ -318,6 +384,7 @@ auto create_logical_device(VkPhysicalDevice physical_device, uint32_t queue_fami
         .queueCount = 1, // one queue should be sufficient for now
         .pQueuePriorities = &queue_prio
     };
+
     auto features = VkPhysicalDeviceFeatures{};
     features.fillModeNonSolid = VK_TRUE;
     features.wideLines = VK_TRUE;
@@ -334,11 +401,17 @@ auto create_logical_device(VkPhysicalDevice physical_device, uint32_t queue_fami
         .ppEnabledExtensionNames = device_extensions.data(),
         .pEnabledFeatures = &features
     };
-    auto device = VkDevice{ 0 };
 
+    auto device = VkDevice{ 0 };
     VK_CHECK(vkCreateDevice(physical_device, &create_info, nullptr, &device));
 
-    return device;
+    cleanup_queue.push([device]() { vkDestroyDevice(device, nullptr); });
+
+    auto present_queue = VkQueue{ 0 };
+    vkGetDeviceQueue(device, queue_family_index, 0, &present_queue); // TODO: hardcoded queue index
+    assert(present_queue);
+
+    return std::tuple{ device, present_queue };
 }
 
 VkExtent2D choose_extent(const VkSurfaceCapabilitiesKHR& surface_caps, VkExtent2D glfw_framebuffer_extent)
@@ -383,7 +456,7 @@ VkSurfaceFormatKHR choose_image_format(const std::vector<VkSurfaceFormatKHR>& av
     return available_formats[0]; // fallback
 }
 
-auto create_swapchain(VkDevice logical_device, VkPhysicalDevice physical_device, VkSurfaceKHR surface, uint32_t queue_family_index, VkExtent2D glfw_framebuffer_extent)
+auto create_swapchain(VkDevice logical_device, VkPhysicalDevice physical_device, VkSurfaceKHR surface, uint32_t queue_family_index, VkExtent2D glfw_framebuffer_extent, decltype(cleanup::general_queue)& cleanup_queue)
 {
     // TODO move these out of the function to not repeat the calls in main loop
     auto surface_caps = VkSurfaceCapabilitiesKHR{};
@@ -430,10 +503,44 @@ auto create_swapchain(VkDevice logical_device, VkPhysicalDevice physical_device,
     auto swapchain = VkSwapchainKHR{ 0 };
     vkCreateSwapchainKHR(logical_device, &create_info, nullptr, &swapchain);
 
+    cleanup_queue.push([logical_device, swapchain]() { vkDestroySwapchainKHR(logical_device, swapchain, nullptr); });
+
     return std::tuple{swapchain, surface_format};
 }
 
-auto get_swapchain_images(VkDevice logical_device, VkSwapchainKHR swapchain, VkFormat image_format)
+auto create_color_image_view(VkDevice logical_device, VkFormat format, VkImage image, decltype(cleanup::general_queue)& cleanup_queue)
+{
+    const auto create_info = VkImageViewCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .image = image,
+        .viewType = VK_IMAGE_VIEW_TYPE_2D,
+        .format = format,
+        .components = VkComponentMapping{
+            .r = VK_COMPONENT_SWIZZLE_IDENTITY,
+            .g = VK_COMPONENT_SWIZZLE_IDENTITY,
+            .b = VK_COMPONENT_SWIZZLE_IDENTITY,
+            .a = VK_COMPONENT_SWIZZLE_IDENTITY,
+        },
+        .subresourceRange = VkImageSubresourceRange{
+            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+            .baseMipLevel = 0,
+            .levelCount = 1,
+            .baseArrayLayer = 0,
+            .layerCount = 1
+        }
+    };
+
+    auto view = VkImageView{};
+    VK_CHECK(vkCreateImageView(logical_device, &create_info, nullptr, &view));
+
+    cleanup_queue.push([logical_device, view]() { vkDestroyImageView(logical_device, view, nullptr); });
+
+    return view;
+}
+
+auto get_swapchain_images(VkDevice logical_device, VkSwapchainKHR swapchain, VkFormat image_format, decltype(cleanup::general_queue)& cleanup_queue)
 {
     auto count = uint32_t{ 0 };
     VK_CHECK(vkGetSwapchainImagesKHR(logical_device, swapchain, &count, nullptr));
@@ -445,32 +552,8 @@ auto get_swapchain_images(VkDevice logical_device, VkSwapchainKHR swapchain, VkF
     image_views.reserve(images.size());
     for (const auto& image : images)
     {
-        const auto create_info = VkImageViewCreateInfo{
-            .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-            .pNext = nullptr,
-            .flags = 0,
-            .image = image,
-            .viewType = VK_IMAGE_VIEW_TYPE_2D,
-            .format = image_format,
-            .components = VkComponentMapping {
-                .r = VK_COMPONENT_SWIZZLE_IDENTITY,
-                .g = VK_COMPONENT_SWIZZLE_IDENTITY,
-                .b = VK_COMPONENT_SWIZZLE_IDENTITY,
-                .a = VK_COMPONENT_SWIZZLE_IDENTITY
-            },
-            .subresourceRange = {
-                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                .baseMipLevel = 0,
-                .levelCount = 1,
-                .baseArrayLayer = 0,
-                .layerCount = 1
-            }
-        };
-
-        auto image_view = VkImageView{ 0 };
-        vkCreateImageView(logical_device, &create_info, nullptr, &image_view);
-
-        image_views.push_back(image_view);
+        const auto view = create_color_image_view(logical_device, image_format, image, cleanup_queue);
+        image_views.push_back(view);
     }
 
     return std::tuple{images, image_views};
@@ -492,7 +575,135 @@ VkShaderModule create_shader_module(VkDevice logical_device, const std::vector<c
     return shader_module;
 }
 
-auto create_graphics_pipelines(VkDevice logical_device, VkExtent2D swapchain_extent, VkFormat swapchain_format, VkFormat depth_format, const VkDescriptorSetLayout& camera_data_descriptor_set)
+auto create_render_pass(VkDevice logical_device, VkFormat swapchain_format, VkFormat depth_format, VkSampleCountFlagBits samples, decltype(cleanup::general_queue)& cleanup_queue)
+{
+    const auto color_attachment = VkAttachmentDescription{
+        .flags = 0,
+        .format = swapchain_format,
+        .samples = samples,
+        .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+        .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+        .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+        .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+        .finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+    };
+
+    const auto depth_attachment = VkAttachmentDescription{
+        .flags = 0,
+        .format = depth_format,
+        .samples = samples,
+        .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+        .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+        .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+        .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+        .finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+    };
+
+    const auto color_resolve_attachment = VkAttachmentDescription{
+        .flags = 0,
+        .format = swapchain_format,
+        .samples = VK_SAMPLE_COUNT_1_BIT,
+        .loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+        .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+        .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+        .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+        .finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR
+    };
+
+    const auto color_attachment_reference = VkAttachmentReference{
+        .attachment = 0,
+        .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
+    };
+
+    const auto depth_attachment_reference = VkAttachmentReference{
+        .attachment = 1,
+        .layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+    };
+
+    const auto color_resolve_reference = VkAttachmentReference{
+        .attachment = 2,
+        .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
+    };
+
+    const auto subpass = VkSubpassDescription{
+        .flags = 0,
+        .pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
+        .inputAttachmentCount = 0,
+        .pInputAttachments = nullptr,
+        .colorAttachmentCount = 1,
+        .pColorAttachments = &color_attachment_reference,
+        .pResolveAttachments = &color_resolve_reference,
+        .pDepthStencilAttachment = &depth_attachment_reference,
+        .preserveAttachmentCount = 0,
+        .pPreserveAttachments = nullptr
+    };
+
+    const auto subpass_dependencies = std::array{
+        VkSubpassDependency{
+            .srcSubpass = VK_SUBPASS_EXTERNAL,
+            .dstSubpass = 0,
+            .srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+            .dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+            .srcAccessMask = 0,
+            .dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+            .dependencyFlags = 0
+        },
+        VkSubpassDependency{
+            .srcSubpass = VK_SUBPASS_EXTERNAL,
+            .dstSubpass = 0,
+            .srcStageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+            .dstStageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+            .srcAccessMask = 0,
+            .dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+            .dependencyFlags = 0
+        },
+    };
+
+    const auto attachments = std::array{ color_attachment, depth_attachment, color_resolve_attachment };
+    const auto render_pass_create_info = VkRenderPassCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .attachmentCount = attachments.size(),
+        .pAttachments = attachments.data(),
+        .subpassCount = 1,
+        .pSubpasses = &subpass,
+        .dependencyCount = subpass_dependencies.size(),
+        .pDependencies = subpass_dependencies.data()
+    };
+
+    auto render_pass = VkRenderPass{};
+    VK_CHECK(vkCreateRenderPass(logical_device, &render_pass_create_info, nullptr, &render_pass));
+
+    cleanup_queue.push([logical_device, render_pass]() { vkDestroyRenderPass(logical_device, render_pass, nullptr); });
+
+    return render_pass;
+}
+
+auto create_pipeline_layout(VkDevice logical_device, const std::vector<VkDescriptorSetLayout>& set_layouts, decltype(cleanup::general_queue)& cleanup_queue)
+{
+    const auto pipeline_layout_create_info = VkPipelineLayoutCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .setLayoutCount = static_cast<uint32_t>(set_layouts.size()),
+        .pSetLayouts = set_layouts.data(),
+        .pushConstantRangeCount = 0,
+        .pPushConstantRanges = nullptr
+    };
+
+    auto pipeline_layout = VkPipelineLayout{};
+    VK_CHECK(vkCreatePipelineLayout(logical_device, &pipeline_layout_create_info, nullptr, &pipeline_layout));
+
+    cleanup_queue.push([logical_device, pipeline_layout]() { vkDestroyPipelineLayout(logical_device, pipeline_layout, nullptr); });
+
+    return pipeline_layout;
+}
+
+auto create_graphics_pipelines(VkDevice logical_device, VkRenderPass render_pass, VkPipelineLayout pipeline_layout, VkExtent2D swapchain_extent, VkFormat swapchain_format, VkFormat depth_format, const VkDescriptorSetLayout& camera_data_descriptor_set, decltype(cleanup::general_queue)& cleanup_queue)
 {
     spdlog::info("Loading shaders");
     const auto triangle_vertex_shader = create_shader_module(logical_device, read_file(shader_path::vertex::triangle));
@@ -699,124 +910,6 @@ auto create_graphics_pipelines(VkDevice logical_device, VkExtent2D swapchain_ext
         .blendConstants = {0.f, 0.f, 0.f, 0.f}
     };
 
-    const auto descriptor_set_layouts = std::array{
-        camera_data_descriptor_set
-    };
-
-    const auto pipeline_layout_create_info = VkPipelineLayoutCreateInfo{
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-        .pNext = nullptr,
-        .flags = 0,
-        .setLayoutCount = 1,
-        .pSetLayouts = descriptor_set_layouts.data(),
-        .pushConstantRangeCount = 0,
-        .pPushConstantRanges = nullptr
-    };
-
-    auto pipeline_layout = VkPipelineLayout{};
-    VK_CHECK(vkCreatePipelineLayout(logical_device, &pipeline_layout_create_info, nullptr, &pipeline_layout));
-
-    const auto color_attachment = VkAttachmentDescription{
-        .flags = 0,
-        .format = swapchain_format,
-        .samples = msaa_samples,
-        .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
-        .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
-        .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
-        .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
-        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-        .finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-    };
-
-    const auto depth_attachment = VkAttachmentDescription{
-        .flags = 0,
-        .format = depth_format,
-        .samples = msaa_samples,
-        .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
-        .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
-        .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
-        .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
-        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-        .finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
-    };
-
-    const auto color_resolve_attachment = VkAttachmentDescription{
-        .flags = 0,
-        .format = swapchain_format,
-        .samples = VK_SAMPLE_COUNT_1_BIT,
-        .loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
-        .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
-        .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
-        .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
-        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-        .finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR
-    };
-
-    const auto attachment_ref = VkAttachmentReference{
-        .attachment = 0,
-        .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
-    };
-
-    const auto depth_attachment_reference = VkAttachmentReference{
-        .attachment = 1,
-        .layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
-    };
-
-    const auto color_resolve_reference = VkAttachmentReference{
-        .attachment = 2,
-        .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
-    };
-
-    const auto subpass = VkSubpassDescription{
-        .flags = 0,
-        .pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
-        .inputAttachmentCount = 0,
-        .pInputAttachments = nullptr,
-        .colorAttachmentCount = 1,
-        .pColorAttachments = &attachment_ref,
-        .pResolveAttachments = &color_resolve_reference,
-        .pDepthStencilAttachment = &depth_attachment_reference,
-        .preserveAttachmentCount = 0,
-        .pPreserveAttachments = nullptr
-    };
-
-    const auto subpass_dependencies = std::array{
-        VkSubpassDependency{
-            .srcSubpass = VK_SUBPASS_EXTERNAL,
-            .dstSubpass = 0,
-            .srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-            .dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-            .srcAccessMask = 0,
-            .dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
-            .dependencyFlags = 0
-        },
-        VkSubpassDependency{
-            .srcSubpass = VK_SUBPASS_EXTERNAL,
-            .dstSubpass = 0,
-            .srcStageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
-            .dstStageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
-            .srcAccessMask = 0,
-            .dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
-            .dependencyFlags = 0
-        },
-    };
-
-    const auto attachments = std::array{ color_attachment, depth_attachment, color_resolve_attachment };
-    const auto render_pass_create_info = VkRenderPassCreateInfo{
-        .sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
-        .pNext = nullptr,
-        .flags = 0,
-        .attachmentCount = attachments.size(),
-        .pAttachments = attachments.data(),
-        .subpassCount = 1,
-        .pSubpasses = &subpass,
-        .dependencyCount = subpass_dependencies.size(),
-        .pDependencies = subpass_dependencies.data()
-    };
-
-    auto render_pass = VkRenderPass{};
-    VK_CHECK(vkCreateRenderPass(logical_device, &render_pass_create_info, nullptr, &render_pass));
-
     const auto pipeline_create_infos = std::array{
         VkGraphicsPipelineCreateInfo{
             .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
@@ -865,15 +958,22 @@ auto create_graphics_pipelines(VkDevice logical_device, VkExtent2D swapchain_ext
     auto pipelines = std::array{ VkPipeline{ 0 }, VkPipeline{ 0 }};
     vkCreateGraphicsPipelines(logical_device, VK_NULL_HANDLE, pipeline_create_infos.size(), pipeline_create_infos.data(), nullptr, pipelines.data());
 
+    cleanup_queue.push([logical_device, pipelines]() {
+        for (const auto pipeline : pipelines)
+        {
+            vkDestroyPipeline(logical_device, pipeline, nullptr);
+        }
+    });
+
     vkDestroyShaderModule(logical_device, triangle_vertex_shader, nullptr);
     vkDestroyShaderModule(logical_device, triangle_fragment_shader, nullptr);
     vkDestroyShaderModule(logical_device, grid_vertex_shader, nullptr);
     vkDestroyShaderModule(logical_device, grid_fragment_shader, nullptr);
 
-    return std::tuple{pipelines[0], pipelines[1], pipeline_layout, render_pass};
+    return std::tuple{ pipelines[0], pipelines[1] };
 }
 
-auto create_swapchain_framebuffers(VkDevice logical_device, VkRenderPass render_pass, const std::vector<VkImageView>& color_imageviews, const std::vector<VkImageView>& swapchain_imageviews, const std::vector<VkImageView> depth_image_views, VkExtent2D swapchain_extent)
+auto create_swapchain_framebuffers(VkDevice logical_device, VkRenderPass render_pass, const std::vector<VkImageView>& color_imageviews, const std::vector<VkImageView>& swapchain_imageviews, const std::vector<VkImageView> depth_image_views, VkExtent2D swapchain_extent, decltype(cleanup::general_queue)& cleanup_queue)
 {
     assert(swapchain_imageviews.size() == depth_image_views.size());
 
@@ -895,12 +995,14 @@ auto create_swapchain_framebuffers(VkDevice logical_device, VkRenderPass render_
         };
 
         VK_CHECK(vkCreateFramebuffer(logical_device, &create_info, nullptr, &framebuffers[i]));
+
+        cleanup_queue.push([logical_device, framebuffer = framebuffers[i]]() { vkDestroyFramebuffer(logical_device, framebuffer, nullptr); });
     }
 
     return framebuffers;
 }
 
-auto create_command_pool(VkDevice logical_device, uint32_t queue_family_index)
+auto create_command_pool(VkDevice logical_device, uint32_t queue_family_index, decltype(cleanup::general_queue)& cleanup_queue)
 {
     const auto create_info = VkCommandPoolCreateInfo{
         .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
@@ -912,10 +1014,12 @@ auto create_command_pool(VkDevice logical_device, uint32_t queue_family_index)
     auto command_pool = VkCommandPool{};
     VK_CHECK(vkCreateCommandPool(logical_device, &create_info, nullptr, &command_pool));
 
+    cleanup_queue.push([logical_device, command_pool]() { vkDestroyCommandPool(logical_device, command_pool, nullptr); });
+
     return command_pool;
 }
 
-auto create_command_buffers(VkDevice logical_device, VkCommandPool command_pool, uint32_t count)
+auto create_command_buffers(VkDevice logical_device, VkCommandPool command_pool, uint32_t count, decltype(cleanup::general_queue)& cleanup_queue)
 {
     auto command_buffers = std::vector<VkCommandBuffer>(count);
 
@@ -929,10 +1033,12 @@ auto create_command_buffers(VkDevice logical_device, VkCommandPool command_pool,
 
     VK_CHECK(vkAllocateCommandBuffers(logical_device, &allocate_info, command_buffers.data()));
 
+    cleanup_queue.push([logical_device, command_pool, command_buffers]() { vkFreeCommandBuffers(logical_device, command_pool, command_buffers.size(), command_buffers.data()); });
+
     return command_buffers;
 }
 
-auto create_semaphores(VkDevice logical_device, uint32_t count)
+auto create_semaphores(VkDevice logical_device, uint32_t count, decltype(cleanup::general_queue)& cleanup_queue)
 {
     auto semaphores = std::vector<VkSemaphore>(count);
 
@@ -947,13 +1053,15 @@ auto create_semaphores(VkDevice logical_device, uint32_t count)
         auto semaphore = VkSemaphore{};
         VK_CHECK(vkCreateSemaphore(logical_device, &create_info, nullptr, &semaphore));
 
+        cleanup_queue.push([logical_device, semaphore]() { vkDestroySemaphore(logical_device, semaphore, nullptr); });
+
         semaphores[i] = semaphore;
     }
 
     return semaphores;
 }
 
-auto create_fences(VkDevice logical_device, uint32_t count)
+auto create_fences(VkDevice logical_device, uint32_t count, decltype(cleanup::general_queue)& cleanup_queue)
 {
     auto fences = std::vector<VkFence>(count);
 
@@ -968,13 +1076,52 @@ auto create_fences(VkDevice logical_device, uint32_t count)
         auto fence = VkFence{};
         VK_CHECK(vkCreateFence(logical_device, &create_info, nullptr, &fence));
 
+        cleanup_queue.push([logical_device, fence]() { vkDestroyFence(logical_device, fence, nullptr); });
+
         fences[i] = fence;
     }
 
     return fences;
 }
 
-auto create_color_image(VkDevice logical_device, VkFormat swapchain_format, VkExtent2D swapchain_extent)
+
+auto find_memory_type_index(VkPhysicalDevice physical_device, uint32_t memory_type_requirements, VkMemoryPropertyFlags memory_property_flags)
+{
+    auto memory_properties = VkPhysicalDeviceMemoryProperties{};
+
+    vkGetPhysicalDeviceMemoryProperties(physical_device, &memory_properties);
+
+    for (uint32_t i = 0; i < memory_properties.memoryTypeCount; ++i)
+    {
+        const auto& memory_type = memory_properties.memoryTypes[i];
+
+        if ( (memory_type_requirements & (1 << i)) && (memory_type.propertyFlags & memory_property_flags) == memory_property_flags)
+        {
+            return i;
+        }
+    }
+
+    throw std::runtime_error("");
+}
+
+auto allocate_memory(VkDevice logical_device, std::size_t size, uint32_t memory_type_index, decltype(cleanup::general_queue)& cleanup_queue)
+{
+    const auto allocate_info = VkMemoryAllocateInfo{
+        .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+        .pNext = nullptr,
+        .allocationSize = size,
+        .memoryTypeIndex = memory_type_index
+    };
+
+    auto memory = VkDeviceMemory{};
+    vkAllocateMemory(logical_device, &allocate_info, nullptr, &memory);
+
+    cleanup_queue.push([logical_device, memory]() { vkFreeMemory(logical_device, memory, nullptr); });
+
+    return memory;
+}
+
+auto create_color_image(VkDevice logical_device, VkFormat swapchain_format, VkExtent2D swapchain_extent, decltype(cleanup::general_queue)& cleanup_queue)
 {
         const auto create_info = VkImageCreateInfo{
             .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
@@ -1001,157 +1148,104 @@ auto create_color_image(VkDevice logical_device, VkFormat swapchain_format, VkEx
         auto image = VkImage{};
         VK_CHECK(vkCreateImage(logical_device, &create_info, nullptr, &image));
 
-        auto memory_requirements = VkMemoryRequirements{};
-        vkGetImageMemoryRequirements(logical_device, image, &memory_requirements);
-
-        return std::tuple{image, memory_requirements};
-}
-
-auto create_color_image_views(VkDevice logical_device, VkFormat swapchain_format, std::vector<VkImage> images)
-{
-    auto views = std::vector<VkImageView>(images.size());
-
-    for (std::size_t i = 0; i < images.size(); ++i)
-    {
-        const auto create_info = VkImageViewCreateInfo{
-            .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-            .pNext = nullptr,
-            .flags = 0,
-            .image = images[i],
-            .viewType = VK_IMAGE_VIEW_TYPE_2D,
-            .format = swapchain_format,
-            .components = VkComponentMapping{
-                .r = VK_COMPONENT_SWIZZLE_IDENTITY,
-                .g = VK_COMPONENT_SWIZZLE_IDENTITY,
-                .b = VK_COMPONENT_SWIZZLE_IDENTITY,
-                .a = VK_COMPONENT_SWIZZLE_IDENTITY,
-            },
-            .subresourceRange = VkImageSubresourceRange{
-                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                .baseMipLevel = 0,
-                .levelCount = 1,
-                .baseArrayLayer = 0,
-                .layerCount = 1
-            }
-        };
-
-        auto view = VkImageView{};
-        VK_CHECK(vkCreateImageView(logical_device, &create_info, nullptr, &view));
-
-        views[i] = view;
-    }
-
-    return views;
-}
-
-namespace depth
-{
-    auto create_image(VkDevice logical_device, VkExtent2D swapchain_extent)
-    {
-        const auto create_info = VkImageCreateInfo{
-            .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
-            .pNext = nullptr,
-            .flags = 0,
-            .imageType = VK_IMAGE_TYPE_2D,
-            .format = depth_format,
-            .extent = VkExtent3D{
-                .width = swapchain_extent.width,
-                .height = swapchain_extent.height,
-                .depth = 1
-            },
-            .mipLevels = 1,
-            .arrayLayers = 1,
-            .samples = msaa_samples,
-            .tiling = VK_IMAGE_TILING_OPTIMAL,
-            .usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
-            .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
-            .queueFamilyIndexCount = 0,
-            .pQueueFamilyIndices = nullptr,
-            .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED
-        };
-
-        auto image = VkImage{};
-        VK_CHECK(vkCreateImage(logical_device, &create_info, nullptr, &image));
+        cleanup_queue.push([logical_device, image]() { vkDestroyImage(logical_device, image, nullptr); });
 
         auto memory_requirements = VkMemoryRequirements{};
         vkGetImageMemoryRequirements(logical_device, image, &memory_requirements);
 
         return std::tuple{image, memory_requirements};
-    }
-
-    auto create_image_views(VkDevice logical_device, std::vector<VkImage> images)
-    {
-        auto views = std::vector<VkImageView>(images.size());
-
-        for (std::size_t i = 0; i < images.size(); ++i)
-        {
-            const auto create_info = VkImageViewCreateInfo{
-                .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-                .pNext = nullptr,
-                .flags = 0,
-                .image = images[i],
-                .viewType = VK_IMAGE_VIEW_TYPE_2D,
-                .format = depth_format,
-                .components = VkComponentMapping{
-                    .r = VK_COMPONENT_SWIZZLE_IDENTITY,
-                    .g = VK_COMPONENT_SWIZZLE_IDENTITY,
-                    .b = VK_COMPONENT_SWIZZLE_IDENTITY,
-                    .a = VK_COMPONENT_SWIZZLE_IDENTITY,
-                },
-                .subresourceRange = VkImageSubresourceRange{
-                    .aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
-                    .baseMipLevel = 0,
-                    .levelCount = 1,
-                    .baseArrayLayer = 0,
-                    .layerCount = 1
-                }
-            };
-
-            auto view = VkImageView{};
-            VK_CHECK(vkCreateImageView(logical_device, &create_info, nullptr, &view));
-
-            views[i] = view;
-        }
-
-        return views;
-    }
 }
 
-auto find_memory_type_index(VkPhysicalDevice physical_device, uint32_t memory_type_requirements, VkMemoryPropertyFlags memory_property_flags)
+auto create_color_image(VkDevice logical_device, VkPhysicalDevice physical_device, VkFormat swapchain_format, VkExtent2D swapchain_extent, decltype(cleanup::general_queue)& cleanup_queue)
 {
-    auto memory_properties = VkPhysicalDeviceMemoryProperties{};
+    const auto [image, memory_requirements] = create_color_image(logical_device, swapchain_format, swapchain_extent, cleanup_queue);
 
-    vkGetPhysicalDeviceMemoryProperties(physical_device, &memory_properties);
+    const auto memory = allocate_memory(logical_device, memory_requirements.size, find_memory_type_index(physical_device, memory_requirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT), cleanup_queue);
+    VK_CHECK(vkBindImageMemory(logical_device, image, memory, 0));
 
-    for (uint32_t i = 0; i < memory_properties.memoryTypeCount; ++i)
-    {
-        const auto& memory_type = memory_properties.memoryTypes[i];
+    const auto view = create_color_image_view(logical_device, swapchain_format, image, cleanup_queue);
 
-        if ( (memory_type_requirements & (1 << i)) && (memory_type.propertyFlags & memory_property_flags) == memory_property_flags)
-        {
-            return i;
-        }
-    }
-
-    throw std::runtime_error("");
+    return std::tuple{image, view, memory};
 }
 
-auto allocate_memory(VkDevice logical_device, std::size_t size, uint32_t memory_type_index)
+auto create_depth_image(VkDevice logical_device, VkExtent2D swapchain_extent, decltype(cleanup::general_queue)& cleanup_queue)
 {
-    const auto allocate_info = VkMemoryAllocateInfo{
-        .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+    const auto create_info = VkImageCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
         .pNext = nullptr,
-        .allocationSize = size,
-        .memoryTypeIndex = memory_type_index
+        .flags = 0,
+        .imageType = VK_IMAGE_TYPE_2D,
+        .format = depth_format,
+        .extent = VkExtent3D{
+            .width = swapchain_extent.width,
+            .height = swapchain_extent.height,
+            .depth = 1
+        },
+        .mipLevels = 1,
+        .arrayLayers = 1,
+        .samples = msaa_samples,
+        .tiling = VK_IMAGE_TILING_OPTIMAL,
+        .usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+        .queueFamilyIndexCount = 0,
+        .pQueueFamilyIndices = nullptr,
+        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED
     };
 
-    auto memory = VkDeviceMemory{};
-    vkAllocateMemory(logical_device, &allocate_info, nullptr, &memory);
+    auto image = VkImage{};
+    VK_CHECK(vkCreateImage(logical_device, &create_info, nullptr, &image));
 
-    return memory;
+    cleanup_queue.push([logical_device, image]() { vkDestroyImage(logical_device, image, nullptr); });
+
+    auto memory_requirements = VkMemoryRequirements{};
+    vkGetImageMemoryRequirements(logical_device, image, &memory_requirements);
+
+    return std::tuple{image, memory_requirements};
 }
 
-auto recreate_graphics_pipeline_and_swapchain(GLFWwindow* window, VkDevice logical_device, VkPhysicalDevice physical_device, VkSurfaceKHR surface, uint32_t queue_family_index, VkFormat swapchain_format, VkDescriptorSetLayout camera_data_descriptor_set_layout)
+auto create_depth_image_view(VkDevice logical_device, VkImage image, decltype(cleanup::general_queue)& cleanup_queue)
+{
+    const auto create_info = VkImageViewCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .image = image,
+        .viewType = VK_IMAGE_VIEW_TYPE_2D,
+        .format = depth_format,
+        .components = VkComponentMapping{
+            .r = VK_COMPONENT_SWIZZLE_IDENTITY,
+            .g = VK_COMPONENT_SWIZZLE_IDENTITY,
+            .b = VK_COMPONENT_SWIZZLE_IDENTITY,
+            .a = VK_COMPONENT_SWIZZLE_IDENTITY,
+        },
+        .subresourceRange = VkImageSubresourceRange{
+            .aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
+            .baseMipLevel = 0,
+            .levelCount = 1,
+            .baseArrayLayer = 0,
+            .layerCount = 1
+        }
+    };
+
+    auto view = VkImageView{};
+    VK_CHECK(vkCreateImageView(logical_device, &create_info, nullptr, &view));
+
+    cleanup_queue.push([logical_device, view]() { vkDestroyImageView(logical_device, view, nullptr); });
+
+    return view;
+}
+
+auto create_depth_image(VkDevice logical_device, VkPhysicalDevice physical_device, VkExtent2D swapchain_extent, decltype(cleanup::general_queue)& cleanup_queue)
+{
+    auto [image, mem_reqs] = create_depth_image(logical_device, swapchain_extent, cleanup_queue);
+    auto memory = allocate_memory(logical_device, mem_reqs.size, find_memory_type_index(physical_device, mem_reqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT), cleanup_queue);
+    VK_CHECK(vkBindImageMemory(logical_device, image, memory, 0));
+    auto view = create_depth_image_view(logical_device, image, cleanup_queue);
+
+    return std::tuple{ image, view, memory };
+}
+
+auto recreate_graphics_pipeline_and_swapchain(GLFWwindow* window, VkDevice logical_device, VkPhysicalDevice physical_device, VkRenderPass render_pass, VkPipelineLayout pipeline_layout, VkSurfaceKHR surface, uint32_t queue_family_index, VkFormat swapchain_format, VkDescriptorSetLayout camera_data_descriptor_set_layout, decltype(cleanup::general_queue)& cleanup_queue)
 {
     int glfw_fb_extent_width, glfw_fb_extent_height;
     glfwGetFramebufferSize(window, &glfw_fb_extent_width, &glfw_fb_extent_height);
@@ -1159,22 +1253,16 @@ auto recreate_graphics_pipeline_and_swapchain(GLFWwindow* window, VkDevice logic
     const auto glfw_extent = VkExtent2D{ static_cast<uint32_t>(glfw_fb_extent_width), static_cast<uint32_t>(glfw_fb_extent_height) };
 
     // TODO reuse old pipeline handle for faster recreation
-    const auto [triangle_pipeline, grid_pipeline, pipeline_layout, render_pass] = create_graphics_pipelines(logical_device, glfw_extent, swapchain_format, depth_format, camera_data_descriptor_set_layout);
-    const auto [swapchain, surface_format] = create_swapchain(logical_device, physical_device, surface, queue_family_index, glfw_extent);
-    const auto [swapchain_images, swapchain_image_views] = get_swapchain_images(logical_device, swapchain, surface_format.format);
+    const auto [triangle_pipeline, grid_pipeline] = create_graphics_pipelines(logical_device, render_pass, pipeline_layout, glfw_extent, swapchain_format, depth_format, camera_data_descriptor_set_layout, cleanup_queue);
+    const auto [swapchain, surface_format] = create_swapchain(logical_device, physical_device, surface, queue_family_index, glfw_extent, cleanup_queue);
+    const auto [swapchain_images, swapchain_image_views] = get_swapchain_images(logical_device, swapchain, surface_format.format, cleanup_queue);
 
-    auto [color_image, color_image_mem_reqs] = create_color_image(logical_device, swapchain_format, glfw_extent);
-    auto color_image_memory = allocate_memory(logical_device, color_image_mem_reqs.size, find_memory_type_index(physical_device, color_image_mem_reqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT));
-    VK_CHECK(vkBindImageMemory(logical_device, color_image, color_image_memory, 0));
-    auto color_image_views = create_color_image_views(logical_device, swapchain_format, { color_image });
+    auto [color_image, color_image_view, color_image_memory] = create_color_image(logical_device, physical_device, swapchain_format, glfw_extent, cleanup_queue);
+    auto [depth_image, depth_image_view, depth_image_memory] = create_depth_image(logical_device, physical_device, glfw_extent, cleanup_queue);
 
-    auto [depth_image, depth_image_mem_reqs] = depth::create_image(logical_device, glfw_extent);
-    auto depth_image_memory = allocate_memory(logical_device, depth_image_mem_reqs.size, find_memory_type_index(physical_device, depth_image_mem_reqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT));
-    VK_CHECK(vkBindImageMemory(logical_device, depth_image, depth_image_memory, 0));
-    auto depth_image_views = depth::create_image_views(logical_device, { depth_image } );
-    const auto swapchain_framebuffers = create_swapchain_framebuffers(logical_device, render_pass, color_image_views, swapchain_image_views, depth_image_views, glfw_extent);
+    const auto swapchain_framebuffers = create_swapchain_framebuffers(logical_device, render_pass, { color_image_view }, swapchain_image_views, { depth_image_view }, glfw_extent, cleanup_queue);
 
-    return std::tuple{triangle_pipeline, grid_pipeline, pipeline_layout, glfw_extent, swapchain, surface_format, swapchain_images, swapchain_image_views, render_pass, swapchain_framebuffers, color_image, color_image_memory, color_image_views, depth_image, depth_image_views, depth_image_memory};
+    return std::tuple{ triangle_pipeline, grid_pipeline, glfw_extent, swapchain, surface_format, swapchain_images, swapchain_image_views, swapchain_framebuffers, color_image, color_image_memory, color_image_view, depth_image, depth_image_view, depth_image_memory };
 }
 
 void handle_keyboard(GLFWwindow* window, camera& camera)
@@ -1205,7 +1293,7 @@ void handle_keyboard(GLFWwindow* window, camera& camera)
     }
 }
 
-auto create_buffer(VkDevice logical_device, std::size_t size, VkBufferUsageFlags usage)
+auto create_buffer(VkDevice logical_device, std::size_t size, VkBufferUsageFlags usage, decltype(cleanup::general_queue)& cleanup_queue)
 {
     const auto create_info = VkBufferCreateInfo{
         .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
@@ -1221,25 +1309,25 @@ auto create_buffer(VkDevice logical_device, std::size_t size, VkBufferUsageFlags
     auto buffer = VkBuffer{};
     VK_CHECK(vkCreateBuffer(logical_device, &create_info, nullptr, &buffer));
 
+    cleanup_queue.push([logical_device, buffer]() { vkDestroyBuffer(logical_device, buffer, nullptr); });
+
     auto memory_requirements = VkMemoryRequirements{};
     vkGetBufferMemoryRequirements(logical_device, buffer, &memory_requirements);
 
     return std::tuple{buffer, memory_requirements};
 }
 
-auto create_buffers(VkDevice logical_device, std::size_t size, VkBufferUsageFlags usage, std::size_t count)
+auto create_buffer(VkDevice logical_device, VkPhysicalDevice physical_device, std::size_t size, VkBufferUsageFlags usage, VkMemoryPropertyFlags memory_flags, decltype(cleanup::general_queue)& cleanup_queue)
 {
-    auto data = std::vector<std::tuple<VkBuffer, VkMemoryRequirements>>(count);
+    const auto [buffer, memory_requirements] = create_buffer(logical_device, size, usage, cleanup_queue);
+    const auto memory = allocate_memory(logical_device, memory_requirements.size, find_memory_type_index(physical_device, memory_requirements.memoryTypeBits, memory_flags), cleanup_queue);
 
-    for (std::size_t i = 0; i < count; ++i)
-    {
-        data[i] = create_buffer(logical_device, size, usage);
-    }
+    VK_CHECK(vkBindBufferMemory(logical_device, buffer, memory, 0));
 
-    return data;
+    return std::tuple{buffer, memory};
 }
 
-auto map_memory(VkDevice logical_device, VkDeviceMemory device_memory, uint32_t offset, const void* in_data, std::size_t size)
+auto copy_memory(VkDevice logical_device, VkDeviceMemory device_memory, uint32_t offset, const void* in_data, std::size_t size)
 {
     void* pData;
     VK_CHECK(vkMapMemory(logical_device, device_memory, offset, size, 0, &pData));
@@ -1249,7 +1337,7 @@ auto map_memory(VkDevice logical_device, VkDeviceMemory device_memory, uint32_t 
     vkUnmapMemory(logical_device, device_memory);
 }
 
-auto create_descriptor_set_layout(VkDevice logical_device)
+auto create_descriptor_set_layout(VkDevice logical_device, decltype(cleanup::general_queue)& cleanup_queue)
 {
     const auto binding = VkDescriptorSetLayoutBinding{
         .binding = 0,
@@ -1270,10 +1358,12 @@ auto create_descriptor_set_layout(VkDevice logical_device)
     auto layout = VkDescriptorSetLayout{};
     VK_CHECK(vkCreateDescriptorSetLayout(logical_device, &create_info, nullptr, &layout));
 
+    cleanup_queue.push([logical_device, layout]() { vkDestroyDescriptorSetLayout(logical_device, layout, nullptr); });
+
     return layout;
 }
 
-auto create_descriptor_pool(VkDevice logical_device)
+auto create_descriptor_pool(VkDevice logical_device, decltype(cleanup::general_queue)& cleanup_queue)
 {
     const auto pool_size = VkDescriptorPoolSize{
         .type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
@@ -1293,28 +1383,26 @@ auto create_descriptor_pool(VkDevice logical_device)
 
     auto pool = VkDescriptorPool{};
     VK_CHECK(vkCreateDescriptorPool(logical_device, &create_info, nullptr, &pool));
+
+    cleanup_queue.push([logical_device, pool]() { vkDestroyDescriptorPool(logical_device, pool, nullptr); });
+
     return pool;
 }
 
 auto allocate_descriptor_sets(VkDevice logical_device, const VkDescriptorSetLayout& layout, const VkDescriptorPool& pool, std::size_t count)
 {
+    const auto set_layouts = std::vector<VkDescriptorSetLayout>(count, layout);
+    const auto allocate_info = VkDescriptorSetAllocateInfo{
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+        .pNext = nullptr,
+        .descriptorPool = pool,
+        .descriptorSetCount = static_cast<uint32_t>(count),
+        .pSetLayouts = set_layouts.data()
+    };
+
     auto sets = std::vector<VkDescriptorSet>(count);
+    VK_CHECK(vkAllocateDescriptorSets(logical_device, &allocate_info, sets.data()));
 
-    for (std::size_t i = 0; i < count; ++i)
-    {
-        const auto allocate_info = VkDescriptorSetAllocateInfo{
-            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
-            .pNext = nullptr,
-            .descriptorPool = pool,
-            .descriptorSetCount = 1,
-            .pSetLayouts = &layout
-        };
-
-        auto descriptor_set = VkDescriptorSet{};
-        VK_CHECK(vkAllocateDescriptorSets(logical_device, &allocate_info, &descriptor_set));
-
-        sets[i] = descriptor_set;
-    }
     return sets;
 }
 
@@ -1354,49 +1442,9 @@ auto pad_uniform_buffer_size(std::size_t original_size, std::size_t min_uniform_
     return aligned_size;
 }
 
-auto generate_cone_vertex_data()
+namespace gui
 {
-    constexpr auto base_vertices_count = 12;
-    constexpr auto angle_step = 2 * std::numbers::pi / base_vertices_count;
-
-    auto vertices = std::vector<glm::vec3>(base_vertices_count + 2);
-    vertices[0] = glm::vec3(0, 0, 0);
-    for (std::size_t i = 0; i < base_vertices_count; ++i)
-    {
-        const auto angle = i * angle_step;
-        vertices[i+1] = glm::vec3(std::cos(angle), -2.f, -std::sin(angle));
-    }
-    vertices[vertices.size() - 1] = glm::vec3(0, -2.f, 0);
-
-    const auto triangles_count = base_vertices_count * 2 * 3;
-    auto indices = std::vector<uint16_t>(triangles_count);
-
-    // side triangles
-    for (std::size_t i = 0; i < base_vertices_count; ++i)
-    {
-        indices[3*i] = 0;
-        indices[3*i + 1] = i + 1;
-        indices[3*i + 2] = i + 2;
-    }
-
-    indices[3 * base_vertices_count - 1] = 1;
-
-    // base triangles
-    for (std::size_t i = 0; i < base_vertices_count; ++i)
-    {
-        indices[3*i + 3 * base_vertices_count] = base_vertices_count + 1;
-        indices[3*i + 3 * base_vertices_count + 1] = i + 2;
-        indices[3*i + 3 * base_vertices_count + 2] = i + 1;
-    }
-
-    indices[3 * 2 * base_vertices_count - 2] = 1;
-
-    return std::tuple{ vertices, indices };
-}
-
-namespace imgui
-{
-    auto create_descriptor_pool(VkDevice logical_device)
+    auto create_descriptor_pool(VkDevice logical_device, decltype(cleanup::general_queue)& cleanup_queue)
     {
         // from imgui vulkan_glfw example
         // this is far too much, I reckon
@@ -1425,12 +1473,15 @@ namespace imgui
 
         auto pool = VkDescriptorPool{};
         VK_CHECK(vkCreateDescriptorPool(logical_device, &create_info, nullptr, &pool));
+
+        cleanup_queue.push([logical_device, pool]() { vkDestroyDescriptorPool(logical_device, pool, nullptr); });
+
         return pool;
     }
 
-    auto init(GLFWwindow* window, VkInstance vk_instance, VkDevice logical_device, VkPhysicalDevice physical_device, uint32_t queue_family_index, VkQueue queue, uint32_t images_count, VkRenderPass render_pass, VkSurfaceKHR surface, VkSurfaceFormatKHR surface_format, VkSwapchainKHR swapchain, VkCommandPool command_pool, VkCommandBuffer command_buffer)
+    auto init(GLFWwindow* window, VkInstance vk_instance, VkDevice logical_device, VkPhysicalDevice physical_device, uint32_t queue_family_index, VkQueue queue, uint32_t images_count, VkRenderPass render_pass, VkSurfaceKHR surface, VkSurfaceFormatKHR surface_format, VkSwapchainKHR swapchain, VkCommandPool command_pool, VkCommandBuffer command_buffer, decltype(cleanup::general_queue)& cleanup_queue)
     {
-        const auto descriptor_pool = imgui::create_descriptor_pool(logical_device);
+        const auto descriptor_pool = gui::create_descriptor_pool(logical_device, cleanup_queue);
 
         // imgui
         IMGUI_CHECKVERSION();
@@ -1482,8 +1533,6 @@ namespace imgui
             VK_CHECK(vkDeviceWaitIdle(logical_device));
             ImGui_ImplVulkan_DestroyFontUploadObjects();
         }
-
-        return std::tuple{descriptor_pool, imgui_vulkan_window};
     }
 
     void cleanup()
@@ -1493,7 +1542,7 @@ namespace imgui
         ImGui::DestroyContext();
     }
 
-    void draw_ui(VkCommandBuffer command_buffer)
+    void draw(VkCommandBuffer command_buffer)
     {
         ImGui_ImplVulkan_NewFrame();
         ImGui_ImplGlfw_NewFrame();
@@ -1507,33 +1556,57 @@ namespace imgui
     }
 }
 
+namespace cone
+{
+    auto generate_vertex_data()
+    {
+        constexpr auto base_vertices_count = 12;
+        constexpr auto angle_step = 2 * std::numbers::pi / base_vertices_count;
+
+        auto vertices = std::vector<glm::vec3>(base_vertices_count + 2);
+        vertices[0] = glm::vec3(0, 0, 0);
+        for (std::size_t i = 0; i < base_vertices_count; ++i)
+        {
+            const auto angle = i * angle_step;
+            vertices[i+1] = glm::vec3(std::cos(angle), -2.f, -std::sin(angle));
+        }
+        vertices[vertices.size() - 1] = glm::vec3(0, -2.f, 0);
+
+        const auto triangles_count = base_vertices_count * 2 * 3;
+        auto indices = std::vector<uint16_t>(triangles_count);
+
+        // side triangles
+        for (std::size_t i = 0; i < base_vertices_count; ++i)
+        {
+            indices[3*i] = 0;
+            indices[3*i + 1] = i + 1;
+            indices[3*i + 2] = i + 2;
+        }
+
+        indices[3 * base_vertices_count - 1] = 1;
+
+        // base triangles
+        for (std::size_t i = 0; i < base_vertices_count; ++i)
+        {
+            indices[3*i + 3 * base_vertices_count] = base_vertices_count + 1;
+            indices[3*i + 3 * base_vertices_count + 1] = i + 2;
+            indices[3*i + 3 * base_vertices_count + 2] = i + 1;
+        }
+
+        indices[3 * 2 * base_vertices_count - 2] = 1;
+
+        auto triangle_vertex_buffer = std::vector<vertex>(vertices.size());
+        for (std::size_t i = 0; i < vertices.size(); ++i)
+        {
+            triangle_vertex_buffer[i] = { vertices[i], { 0, 0, 0 } };
+        }
+
+        return std::tuple{ triangle_vertex_buffer, indices };
+    }
+}
+
 int main()
 {
-    struct camera_data
-    {
-        glm::vec4 position;
-        glm::mat4 viewproj;
-    };
-
-    camera_data cam_data;
-
-    struct vertex
-    {
-        glm::vec3 pos;
-        glm::vec3 color;
-    };
-
-    const auto [triangle_vertices, triangle_index_buffer] = generate_cone_vertex_data();
-
-    auto triangle_vertex_buffer = std::vector<vertex>(triangle_vertices.size());
-    for (std::size_t i = 0; i < triangle_vertices.size(); ++i)
-    {
-        triangle_vertex_buffer[i] = { triangle_vertices[i], { 0, 0, 0 } };
-    }
-
-    const auto triangle_vertex_buffer_size = triangle_vertex_buffer.size() * sizeof(vertex);
-    const auto triangle_index_buffer_size = triangle_index_buffer.size() * sizeof(decltype(triangle_index_buffer)::value_type);
-
     spdlog::set_level(spdlog::level::trace);
     spdlog::info("Start");
     VK_CHECK(volkInitialize());
@@ -1542,8 +1615,7 @@ int main()
     const auto glfw_initialized = glfwInit();
     assert(glfw_initialized == GLFW_TRUE);
 
-    const auto window = create_glfw_window();
-
+    const auto window = window::create();
 
     const auto requested_instance_layers = VALIDATION_LAYERS ? std::vector<const char*>{ "VK_LAYER_KHRONOS_validation" } : std::vector<const char*>{};
     const auto required_device_extensions = std::vector<const char*>{ VK_KHR_SWAPCHAIN_EXTENSION_NAME };
@@ -1557,92 +1629,83 @@ int main()
         }
     }
 
-    auto glfw_extensions_count = uint32_t{ 0 };
-    const auto** glfw_extensions = glfwGetRequiredInstanceExtensions(&glfw_extensions_count);
-
-    auto requested_extensions = std::vector<const char*>(glfw_extensions, glfw_extensions + glfw_extensions_count);
+    auto requested_extensions = window::get_vk_extensions();
     requested_extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
 
-    auto vk_instance = create_vulkan_instance(requested_instance_layers, requested_extensions);
+    const auto vk_instance = create_vulkan_instance(requested_instance_layers, requested_extensions, cleanup::general_queue);
     volkLoadInstance(vk_instance);
 
-    auto surface = VkSurfaceKHR{ 0 };
-    VK_CHECK(glfwCreateWindowSurface(vk_instance, window, nullptr, &surface));
+    create_debug_utils_messenger(vk_instance, cleanup::general_queue);
 
-    auto debug_messenger = VkDebugUtilsMessengerEXT{ 0 };
-    VK_CHECK(vkCreateDebugUtilsMessengerEXT(vk_instance, &debug_utils_messenger_create_info, nullptr, &debug_messenger));
+    const auto surface = window::create_vk_surface(vk_instance, window, cleanup::general_queue);
 
     const auto [physical_device, queue_family_index, physical_device_properties] = pick_physical_device(vk_instance, surface, required_device_extensions);
-    const auto logical_device = create_logical_device(physical_device, queue_family_index, required_device_extensions);
+    const auto [logical_device, present_queue] = create_logical_device(physical_device, queue_family_index, required_device_extensions, cleanup::general_queue);
 
-    auto present_queue = VkQueue{ 0 };
-    vkGetDeviceQueue(logical_device, queue_family_index, 0, &present_queue); // TODO: hardcoded queue index
-    assert(present_queue);
+    auto window_extent = window::get_extent(window);
 
-    int glfw_fb_extent_width, glfw_fb_extent_height;
-    glfwGetFramebufferSize(window, &glfw_fb_extent_width, &glfw_fb_extent_height);
-    auto glfw_extent = VkExtent2D{ static_cast<uint32_t>(glfw_fb_extent_width), static_cast<uint32_t>(glfw_fb_extent_height) };
-    auto [swapchain, surface_format] = create_swapchain(logical_device, physical_device, surface, queue_family_index, glfw_extent);
-    auto [swapchain_images, swapchain_image_views] = get_swapchain_images(logical_device, swapchain, surface_format.format);
+    auto [swapchain, surface_format] = create_swapchain(logical_device, physical_device, surface, queue_family_index, window_extent, cleanup::swapchain_queue);
+    auto [swapchain_images, swapchain_image_views] = get_swapchain_images(logical_device, swapchain, surface_format.format, cleanup::swapchain_queue);
 
-    const auto camera_data_descriptor_set_layout = create_descriptor_set_layout(logical_device);
-    auto [triangle_pipeline, grid_pipeline, pipeline_layout, render_pass] = create_graphics_pipelines(logical_device, glfw_extent, surface_format.format, depth_format, camera_data_descriptor_set_layout);
+    const auto render_pass = create_render_pass(logical_device, surface_format.format, depth_format, msaa_samples, cleanup::general_queue);
+    const auto camera_data_descriptor_set_layout = create_descriptor_set_layout(logical_device, cleanup::general_queue);
+    const auto pipeline_layout = create_pipeline_layout(logical_device, { camera_data_descriptor_set_layout }, cleanup::general_queue);
+    auto [cone_pipeline, grid_pipeline] = create_graphics_pipelines(logical_device, render_pass, pipeline_layout, window_extent, surface_format.format, depth_format, camera_data_descriptor_set_layout, cleanup::swapchain_queue);
 
-    constexpr auto max_frames_in_flight = 2;
+    constexpr auto overlapping_frames_count = 2;
+
+    const auto descriptor_pool = create_descriptor_pool(logical_device, cleanup::general_queue);
+    const auto descriptor_sets = allocate_descriptor_sets(logical_device, camera_data_descriptor_set_layout, descriptor_pool, overlapping_frames_count);
+
+    struct
+    {
+        glm::vec4 position;
+        glm::mat4 viewproj;
+    } camera_data;
 
     const auto camera_data_padded_size = pad_uniform_buffer_size(sizeof(camera_data), physical_device_properties.limits.minUniformBufferOffsetAlignment);
-    const auto descriptor_pool = create_descriptor_pool(logical_device);
-    const auto descriptor_sets = allocate_descriptor_sets(logical_device, camera_data_descriptor_set_layout, descriptor_pool, max_frames_in_flight);
-    const auto [camera_data_buffer, camera_data_buffer_memory_requirements] = create_buffer(logical_device, max_frames_in_flight * camera_data_padded_size, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
+    const auto [camera_data_buffer, camera_data_memory] = create_buffer(logical_device, physical_device, overlapping_frames_count * camera_data_padded_size, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, cleanup::general_queue);
     void* camera_data_memory_ptr = nullptr;
-
-    const auto camera_data_memory_type_index = find_memory_type_index(physical_device, camera_data_buffer_memory_requirements.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-    const auto camera_data_memory = allocate_memory(logical_device, max_frames_in_flight * camera_data_padded_size, camera_data_memory_type_index);
-    VK_CHECK(vkBindBufferMemory(logical_device, camera_data_buffer, camera_data_memory, 0));
     VK_CHECK(vkMapMemory(logical_device, camera_data_memory, 0, VK_WHOLE_SIZE, 0, &camera_data_memory_ptr));
 
-    auto [color_image, color_image_mem_reqs] = create_color_image(logical_device, surface_format.format, glfw_extent);
-    auto color_image_memory = allocate_memory(logical_device, color_image_mem_reqs.size, find_memory_type_index(physical_device, color_image_mem_reqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT));
-    VK_CHECK(vkBindImageMemory(logical_device, color_image, color_image_memory, 0));
-    auto color_image_views = create_color_image_views(logical_device, surface_format.format, { color_image });
+    auto [color_image, color_image_view, color_image_memory] = create_color_image(logical_device, physical_device, surface_format.format, window_extent, cleanup::swapchain_queue);
+    auto [depth_image, depth_image_view, depth_image_memory] = create_depth_image(logical_device, physical_device, window_extent, cleanup::swapchain_queue);
 
-    auto [depth_image, depth_image_mem_reqs] = depth::create_image(logical_device, glfw_extent);
-    auto depth_image_memory = allocate_memory(logical_device, depth_image_mem_reqs.size, find_memory_type_index(physical_device, depth_image_mem_reqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT));
-    VK_CHECK(vkBindImageMemory(logical_device, depth_image, depth_image_memory, 0));
-    auto depth_image_views = depth::create_image_views(logical_device, { depth_image } );
-    auto swapchain_framebuffers = create_swapchain_framebuffers(logical_device, render_pass, color_image_views, swapchain_image_views, depth_image_views, glfw_extent);
-    const auto command_pool = create_command_pool(logical_device, queue_family_index);
+    assert(swapchain_image_views.size() == 1); // TODO create color images per each swapchain image?
 
-    const auto command_buffers = create_command_buffers(logical_device, command_pool, max_frames_in_flight);
+    auto swapchain_framebuffers = create_swapchain_framebuffers(logical_device, render_pass, { color_image_view }, swapchain_image_views, { depth_image_view }, window_extent, cleanup::swapchain_queue);
 
-    const auto& [vertex_buffer, vertex_buffer_memory_requirements] = create_buffer(logical_device, triangle_vertex_buffer_size + triangle_index_buffer_size, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
-    const auto vertex_memory_type_index = find_memory_type_index(physical_device, vertex_buffer_memory_requirements.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-    const auto device_memory = allocate_memory(logical_device, triangle_vertex_buffer_size + triangle_index_buffer_size, vertex_memory_type_index);
-    VK_CHECK(vkBindBufferMemory(logical_device, vertex_buffer, device_memory, 0));
-    map_memory(logical_device, device_memory, 0, triangle_vertex_buffer.data(), triangle_vertex_buffer_size);
-    map_memory(logical_device, device_memory, triangle_vertex_buffer_size, triangle_index_buffer.data(), triangle_index_buffer_size);
+    const auto command_pool = create_command_pool(logical_device, queue_family_index, cleanup::general_queue);
+    const auto command_buffers = create_command_buffers(logical_device, command_pool, overlapping_frames_count, cleanup::general_queue);
 
-    const auto image_available_semaphores = create_semaphores(logical_device, max_frames_in_flight);
-    const auto rendering_finished_semaphores = create_semaphores(logical_device, max_frames_in_flight);
-    const auto in_flight_fences = create_fences(logical_device, max_frames_in_flight);
+    const auto [cone_vertex_buffer, cone_index_buffer] = cone::generate_vertex_data();
+    const auto cone_vertex_buffer_size = cone_vertex_buffer.size() * sizeof(vertex);
+    const auto cone_index_buffer_size = cone_index_buffer.size() * sizeof(decltype(cone_index_buffer)::value_type);
 
-    const auto [imgui_descriptor_pool, imgui_vk_window] = imgui::init(window, vk_instance, logical_device, physical_device, queue_family_index, present_queue, max_frames_in_flight, render_pass, surface, surface_format, swapchain, command_pool, command_buffers[0]);
+    const auto [vertex_buffer, device_memory] = create_buffer(logical_device, physical_device, cone_vertex_buffer_size + cone_index_buffer_size, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, cleanup::general_queue);
+    copy_memory(logical_device, device_memory, 0, cone_vertex_buffer.data(), cone_vertex_buffer_size);
+    copy_memory(logical_device, device_memory, cone_vertex_buffer_size, cone_index_buffer.data(), cone_index_buffer_size);
+
+    const auto image_available_semaphores = create_semaphores(logical_device, overlapping_frames_count, cleanup::general_queue);
+    const auto rendering_finished_semaphores = create_semaphores(logical_device, overlapping_frames_count, cleanup::general_queue);
+    const auto overlapping_frames_fences = create_fences(logical_device, overlapping_frames_count, cleanup::general_queue);
+
+    gui::init(window, vk_instance, logical_device, physical_device, queue_family_index, present_queue, overlapping_frames_count, render_pass, surface, surface_format, swapchain, command_pool, command_buffers[0], cleanup::general_queue);
 
     spdlog::trace("Entering main loop.");
     auto current_frame = uint32_t{ 0 };
     auto image_index = uint32_t{ 0 };
     while (!glfwWindowShouldClose(window))
     {
+        glfwPollEvents();
         handle_keyboard(window, g_camera);
 
-        const auto in_flight_fence = in_flight_fences[current_frame];
+        const auto fence = overlapping_frames_fences[current_frame];
         const auto image_available_semaphore = image_available_semaphores[current_frame];
         const auto rendering_finished_semaphore = rendering_finished_semaphores[current_frame];
         const auto command_buffer = command_buffers[current_frame];
 
-        glfwPollEvents();
-
-        VK_CHECK(vkWaitForFences(logical_device, 1, &in_flight_fence, VK_TRUE, UINT64_MAX));
+        VK_CHECK(vkWaitForFences(logical_device, 1, &fence, VK_TRUE, UINT64_MAX));
 
         {
             const auto result = vkAcquireNextImageKHR(logical_device, swapchain, UINT64_MAX, image_available_semaphore, VK_NULL_HANDLE, &image_index);
@@ -1650,31 +1713,10 @@ int main()
             {
                 spdlog::info("Swapchain images no longer match native surface properties. Recreating swapchain.");
                 VK_CHECK(vkDeviceWaitIdle(logical_device));
-                for (const auto& fb : swapchain_framebuffers)
-                {
-                    vkDestroyFramebuffer(logical_device, fb, nullptr);
-                }
-                for (const auto iv : swapchain_image_views)
-                {
-                    vkDestroyImageView(logical_device, iv, nullptr);
-                }
-                vkFreeMemory(logical_device, color_image_memory, nullptr);
-                vkFreeMemory(logical_device, depth_image_memory, nullptr);
-                vkDestroyImage(logical_device, color_image, nullptr);
-                vkDestroyImage(logical_device, depth_image, nullptr);
-                for (const auto& iv : color_image_views)
-                {
-                    vkDestroyImageView(logical_device, iv, nullptr);
-                }
-                for (const auto& iv : depth_image_views)
-                {
-                    vkDestroyImageView(logical_device, iv, nullptr);
-                }
-                vkDestroyRenderPass(logical_device, render_pass, nullptr);
-                vkDestroyPipelineLayout(logical_device, pipeline_layout, nullptr);
-                vkDestroyPipeline(logical_device, triangle_pipeline, nullptr);
-                vkDestroyPipeline(logical_device, grid_pipeline, nullptr);
-                std::tie(triangle_pipeline, grid_pipeline, pipeline_layout, glfw_extent, swapchain, surface_format, swapchain_images, swapchain_image_views, render_pass, swapchain_framebuffers, color_image, color_image_memory, color_image_views, depth_image, depth_image_views, depth_image_memory) = recreate_graphics_pipeline_and_swapchain(window, logical_device, physical_device, surface, queue_family_index, surface_format.format, camera_data_descriptor_set_layout);
+
+                cleanup::flush(cleanup::swapchain_queue);
+
+                std::tie(cone_pipeline, grid_pipeline, window_extent, swapchain, surface_format, swapchain_images, swapchain_image_views, swapchain_framebuffers, color_image, color_image_memory, color_image_view, depth_image, depth_image_view, depth_image_memory) = recreate_graphics_pipeline_and_swapchain(window, logical_device, physical_device, render_pass, pipeline_layout, surface, queue_family_index, surface_format.format, camera_data_descriptor_set_layout, cleanup::swapchain_queue);
                 continue;
             }
             else if (result != VK_SUCCESS)
@@ -1683,7 +1725,7 @@ int main()
             }
         }
 
-        VK_CHECK(vkResetFences(logical_device, 1, &in_flight_fence));
+        VK_CHECK(vkResetFences(logical_device, 1, &fence));
 
         const auto begin_info = VkCommandBufferBeginInfo{
             .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
@@ -1698,7 +1740,7 @@ int main()
         const auto clear_values = std::array{
             VkClearValue{
                 .color = VkClearColorValue{
-                    .float32 = {130.f / 255.f, 163.f / 255.f, 255.f / 255.f}
+                    .float32 = { 130.f / 255.f, 163.f / 255.f, 255.f / 255.f }
                 }
             },
             VkClearValue{
@@ -1716,31 +1758,30 @@ int main()
             .framebuffer = swapchain_framebuffers[image_index],
             .renderArea = VkRect2D {
                 .offset = VkOffset2D { 0, 0 },
-                .extent = glfw_extent
+                .extent = window_extent
             },
             .clearValueCount = clear_values.size(),
             .pClearValues = clear_values.data()
         };
 
-        cam_data.position = glm::vec4(g_camera.position(), 0.f);
-        cam_data.viewproj = g_camera.projection(glfw_extent.width, glfw_extent.height) * g_camera.view();
-        std::memcpy(reinterpret_cast<char*>(camera_data_memory_ptr) + current_frame * camera_data_padded_size, &cam_data, sizeof(cam_data));
+        camera_data.position = glm::vec4(g_camera.position(), 0.f);
+        camera_data.viewproj = g_camera.projection(window_extent.width, window_extent.height) * g_camera.view();
+        std::memcpy(reinterpret_cast<char*>(camera_data_memory_ptr) + current_frame * camera_data_padded_size, &camera_data, sizeof(camera_data));
         update_descriptor_set(logical_device, descriptor_sets[current_frame], camera_data_buffer, current_frame * camera_data_padded_size, camera_data_padded_size);
 
         vkCmdBeginRenderPass(command_buffer, &render_pass_begin_info, VK_SUBPASS_CONTENTS_INLINE);
 
-        vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, triangle_pipeline);
         vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout, 0, 1, &descriptor_sets[current_frame], 0, nullptr);
+        vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, cone_pipeline);
         const auto offsets = std::array{ VkDeviceSize{ 0 } };
         vkCmdBindVertexBuffers(command_buffer, 0, 1, &vertex_buffer, offsets.data());
-        vkCmdBindIndexBuffer(command_buffer, vertex_buffer, triangle_vertex_buffer_size, VK_INDEX_TYPE_UINT16);
-        vkCmdDrawIndexed(command_buffer, triangle_index_buffer.size(), 1, 0, 0, 0);
+        vkCmdBindIndexBuffer(command_buffer, vertex_buffer, cone_vertex_buffer_size, VK_INDEX_TYPE_UINT16);
+        vkCmdDrawIndexed(command_buffer, cone_index_buffer.size(), 1, 0, 0, 0);
 
         vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, grid_pipeline);
-        vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout, 0, 1, &descriptor_sets[current_frame], 0, nullptr);
         vkCmdDraw(command_buffer, 6, 1, 0, 0);
 
-        imgui::draw_ui(command_buffer);
+        gui::draw(command_buffer);
 
         const auto wait_semaphores = std::array{image_available_semaphore};
         const auto wait_stages = VkPipelineStageFlags{VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
@@ -1761,7 +1802,7 @@ int main()
         vkCmdEndRenderPass(command_buffer);
         VK_CHECK(vkEndCommandBuffer(command_buffer));
 
-        VK_CHECK(vkQueueSubmit(present_queue, 1, &submit_info, in_flight_fence));
+        VK_CHECK(vkQueueSubmit(present_queue, 1, &submit_info, fence));
 
         const auto present_info = VkPresentInfoKHR{
             .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
@@ -1776,65 +1817,17 @@ int main()
 
         VK_CHECK(vkQueuePresentKHR(present_queue, &present_info));
 
-        current_frame = (current_frame + 1) % max_frames_in_flight;
+        current_frame = (current_frame + 1) % overlapping_frames_count;
     }
 
     VK_CHECK(vkDeviceWaitIdle(logical_device));
 
     spdlog::trace("Cleanup.");
 
-    imgui::cleanup();
+    gui::cleanup();
 
-    vkDestroyDescriptorPool(logical_device, imgui_descriptor_pool, nullptr);
-    vkDestroyDescriptorPool(logical_device, descriptor_pool, nullptr);
-    vkDestroyDescriptorSetLayout(logical_device, camera_data_descriptor_set_layout, nullptr);
-    vkDestroyBuffer(logical_device, camera_data_buffer, nullptr);
-    vkFreeMemory(logical_device, camera_data_memory, nullptr);
-    vkFreeMemory(logical_device, device_memory, nullptr);
-    vkDestroyBuffer(logical_device, vertex_buffer, nullptr);
-    for (const auto fence : in_flight_fences)
-    {
-        vkDestroyFence(logical_device, fence, nullptr);
-    }
-    for (const auto sem : rendering_finished_semaphores)
-    {
-        vkDestroySemaphore(logical_device, sem, nullptr);
-    }
-    for (const auto sem : image_available_semaphores)
-    {
-        vkDestroySemaphore(logical_device, sem, nullptr);
-    }
-    vkDestroyCommandPool(logical_device, command_pool, nullptr);
-    for (const auto& fb : swapchain_framebuffers)
-    {
-        vkDestroyFramebuffer(logical_device, fb, nullptr);
-    }
-    vkFreeMemory(logical_device, color_image_memory, nullptr);
-    vkFreeMemory(logical_device, depth_image_memory, nullptr);
-    vkDestroyImage(logical_device, color_image, nullptr);
-    vkDestroyImage(logical_device, depth_image, nullptr);
-    for (const auto& iv : color_image_views)
-    {
-        vkDestroyImageView(logical_device, iv, nullptr);
-    }
-    for (const auto& iv : depth_image_views)
-    {
-        vkDestroyImageView(logical_device, iv, nullptr);
-    }
-    for (const auto iv : swapchain_image_views)
-    {
-        vkDestroyImageView(logical_device, iv, nullptr);
-    }
-    vkDestroyPipelineLayout(logical_device, pipeline_layout, nullptr);
-    vkDestroyPipeline(logical_device, triangle_pipeline, nullptr);
-    vkDestroyPipeline(logical_device, grid_pipeline, nullptr);
-    vkDestroyRenderPass(logical_device, render_pass, nullptr);
-    vkDestroySwapchainKHR(logical_device, swapchain, nullptr);
-    vkDestroySurfaceKHR(vk_instance, surface, nullptr);
-    vkDestroyDevice(logical_device, nullptr);
-    vkDestroyDebugUtilsMessengerEXT(vk_instance, debug_messenger, nullptr);
-    vkDestroyInstance(vk_instance, nullptr);
+    cleanup::flush(cleanup::swapchain_queue);
+    cleanup::flush(cleanup::general_queue);
 
-    glfwDestroyWindow(window);
-    glfwTerminate();
+    window::cleanup(window);
 }
