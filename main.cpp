@@ -104,6 +104,10 @@ namespace window
 
     auto create(decltype(cleanup::general_queue)& cleanup_queue)
     {
+        spdlog::trace("Initialize glfw.");
+        const auto glfw_initialized = glfwInit();
+        assert(glfw_initialized == GLFW_TRUE);
+
         spdlog::trace("Create glfw window.");
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
         glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
@@ -702,7 +706,7 @@ auto create_pipeline_layout(VkDevice logical_device, const std::vector<VkDescrip
     return pipeline_layout;
 }
 
-auto create_graphics_pipelines(VkDevice logical_device, VkRenderPass render_pass, VkPipelineLayout pipeline_layout, VkExtent2D swapchain_extent, VkFormat swapchain_format, VkFormat depth_format, const VkDescriptorSetLayout& camera_data_descriptor_set, decltype(cleanup::general_queue)& cleanup_queue)
+auto create_graphics_pipelines(VkDevice logical_device, VkRenderPass render_pass, VkPipelineLayout pipeline_layout, VkExtent2D swapchain_extent, VkFormat swapchain_format, VkFormat depth_format, decltype(cleanup::general_queue)& cleanup_queue)
 {
     spdlog::info("Loading shaders");
     const auto triangle_vertex_shader = create_shader_module(logical_device, read_file(shader_path::vertex::triangle));
@@ -1244,24 +1248,21 @@ auto create_depth_image(VkDevice logical_device, VkPhysicalDevice physical_devic
     return std::tuple{ image, view, memory };
 }
 
-auto recreate_graphics_pipeline_and_swapchain(GLFWwindow* window, VkDevice logical_device, VkPhysicalDevice physical_device, VkRenderPass render_pass, VkPipelineLayout pipeline_layout, VkSurfaceKHR surface, uint32_t queue_family_index, VkFormat swapchain_format, VkDescriptorSetLayout camera_data_descriptor_set_layout, decltype(cleanup::general_queue)& cleanup_queue)
+auto recreate_graphics_pipeline_and_swapchain(GLFWwindow* window, VkDevice logical_device, VkPhysicalDevice physical_device, VkRenderPass render_pass, VkPipelineLayout pipeline_layout, VkSurfaceKHR surface, uint32_t queue_family_index, VkFormat swapchain_format, decltype(cleanup::general_queue)& cleanup_queue)
 {
-    int glfw_fb_extent_width, glfw_fb_extent_height;
-    glfwGetFramebufferSize(window, &glfw_fb_extent_width, &glfw_fb_extent_height);
-    spdlog::debug("GLFW framebuffer size: ({}, {})", glfw_fb_extent_width, glfw_fb_extent_height);
-    const auto glfw_extent = VkExtent2D{ static_cast<uint32_t>(glfw_fb_extent_width), static_cast<uint32_t>(glfw_fb_extent_height) };
+    const auto window_extent = window::get_extent(window);
 
     // TODO reuse old pipeline handle for faster recreation
-    const auto [triangle_pipeline, grid_pipeline] = create_graphics_pipelines(logical_device, render_pass, pipeline_layout, glfw_extent, swapchain_format, depth_format, camera_data_descriptor_set_layout, cleanup_queue);
-    const auto [swapchain, surface_format] = create_swapchain(logical_device, physical_device, surface, queue_family_index, glfw_extent, cleanup_queue);
+    const auto [triangle_pipeline, grid_pipeline] = create_graphics_pipelines(logical_device, render_pass, pipeline_layout, window_extent, swapchain_format, depth_format, cleanup_queue);
+    const auto [swapchain, surface_format] = create_swapchain(logical_device, physical_device, surface, queue_family_index, window_extent, cleanup_queue);
     const auto [swapchain_images, swapchain_image_views] = get_swapchain_images(logical_device, swapchain, surface_format.format, cleanup_queue);
 
-    auto [color_image, color_image_view, color_image_memory] = create_color_image(logical_device, physical_device, swapchain_format, glfw_extent, cleanup_queue);
-    auto [depth_image, depth_image_view, depth_image_memory] = create_depth_image(logical_device, physical_device, glfw_extent, cleanup_queue);
+    auto [color_image, color_image_view, color_image_memory] = create_color_image(logical_device, physical_device, swapchain_format, window_extent, cleanup_queue);
+    auto [depth_image, depth_image_view, depth_image_memory] = create_depth_image(logical_device, physical_device, window_extent, cleanup_queue);
 
-    const auto swapchain_framebuffers = create_swapchain_framebuffers(logical_device, render_pass, { color_image_view }, swapchain_image_views, { depth_image_view }, glfw_extent, cleanup_queue);
+    const auto swapchain_framebuffers = create_swapchain_framebuffers(logical_device, render_pass, { color_image_view }, swapchain_image_views, { depth_image_view }, window_extent, cleanup_queue);
 
-    return std::tuple{ triangle_pipeline, grid_pipeline, glfw_extent, swapchain, surface_format, swapchain_images, swapchain_image_views, swapchain_framebuffers, color_image, color_image_memory, color_image_view, depth_image, depth_image_view, depth_image_memory };
+    return std::tuple{ triangle_pipeline, grid_pipeline, window_extent, swapchain, surface_format, swapchain_images, swapchain_image_views, swapchain_framebuffers, color_image, color_image_memory, color_image_view, depth_image, depth_image_view, depth_image_memory };
 }
 
 void handle_keyboard(GLFWwindow* window, camera& camera)
@@ -1342,7 +1343,7 @@ auto create_descriptor_set_layout(VkDevice logical_device, decltype(cleanup::gen
         .binding = 0,
         .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
         .descriptorCount = 1,
-        .stageFlags = VK_SHADER_STAGE_ALL_GRAPHICS,
+        .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
         .pImmutableSamplers = nullptr
     };
 
@@ -1482,7 +1483,6 @@ namespace gui
     {
         const auto descriptor_pool = gui::create_descriptor_pool(logical_device, cleanup_queue);
 
-        // imgui
         IMGUI_CHECKVERSION();
         ImGui::CreateContext();
         ImGuiIO& io = ImGui::GetIO(); (void)io;
@@ -1497,7 +1497,7 @@ namespace gui
         init_info.Device = logical_device;
         init_info.QueueFamily = queue_family_index;
         init_info.Queue = queue;
-        //init_info.PipelineCache = VK_NULL_HANDLE;
+        init_info.PipelineCache = VK_NULL_HANDLE;
         init_info.DescriptorPool = descriptor_pool;
         init_info.Subpass = 0;
         init_info.MinImageCount = images_count,
@@ -1576,7 +1576,7 @@ namespace cone
         // side triangles
         for (std::size_t i = 0; i < base_vertices_count; ++i)
         {
-            indices[3*i] = 0;
+            indices[3*i + 0] = 0;
             indices[3*i + 1] = i + 1;
             indices[3*i + 2] = i + 2;
         }
@@ -1586,9 +1586,9 @@ namespace cone
         // base triangles
         for (std::size_t i = 0; i < base_vertices_count; ++i)
         {
-            indices[3*i + 3 * base_vertices_count] = base_vertices_count + 1;
-            indices[3*i + 3 * base_vertices_count + 1] = i + 2;
-            indices[3*i + 3 * base_vertices_count + 2] = i + 1;
+            indices[3*i + 3*base_vertices_count + 0] = base_vertices_count + 1;
+            indices[3*i + 3*base_vertices_count + 1] = i + 2;
+            indices[3*i + 3*base_vertices_count + 2] = i + 1;
         }
 
         indices[3 * 2 * base_vertices_count - 2] = 1;
@@ -1608,10 +1608,6 @@ int main()
     spdlog::set_level(spdlog::level::trace);
     spdlog::info("Start");
     VK_CHECK(volkInitialize());
-
-    spdlog::trace("Initialize glfw.");
-    const auto glfw_initialized = glfwInit();
-    assert(glfw_initialized == GLFW_TRUE);
 
     const auto window = window::create(cleanup::general_queue);
 
@@ -1648,7 +1644,7 @@ int main()
     const auto render_pass = create_render_pass(logical_device, surface_format.format, depth_format, msaa_samples, cleanup::general_queue);
     const auto camera_data_descriptor_set_layout = create_descriptor_set_layout(logical_device, cleanup::general_queue);
     const auto pipeline_layout = create_pipeline_layout(logical_device, { camera_data_descriptor_set_layout }, cleanup::general_queue);
-    auto [cone_pipeline, grid_pipeline] = create_graphics_pipelines(logical_device, render_pass, pipeline_layout, window_extent, surface_format.format, depth_format, camera_data_descriptor_set_layout, cleanup::swapchain_queue);
+    auto [cone_pipeline, grid_pipeline] = create_graphics_pipelines(logical_device, render_pass, pipeline_layout, window_extent, surface_format.format, depth_format, cleanup::swapchain_queue);
 
     constexpr auto overlapping_frames_count = 2;
 
@@ -1714,7 +1710,7 @@ int main()
 
                 cleanup::flush(cleanup::swapchain_queue);
 
-                std::tie(cone_pipeline, grid_pipeline, window_extent, swapchain, surface_format, swapchain_images, swapchain_image_views, swapchain_framebuffers, color_image, color_image_memory, color_image_view, depth_image, depth_image_view, depth_image_memory) = recreate_graphics_pipeline_and_swapchain(window, logical_device, physical_device, render_pass, pipeline_layout, surface, queue_family_index, surface_format.format, camera_data_descriptor_set_layout, cleanup::swapchain_queue);
+                std::tie(cone_pipeline, grid_pipeline, window_extent, swapchain, surface_format, swapchain_images, swapchain_image_views, swapchain_framebuffers, color_image, color_image_memory, color_image_view, depth_image, depth_image_view, depth_image_memory) = recreate_graphics_pipeline_and_swapchain(window, logical_device, physical_device, render_pass, pipeline_layout, surface, queue_family_index, surface_format.format, cleanup::swapchain_queue);
                 continue;
             }
             else if (result != VK_SUCCESS)
@@ -1748,7 +1744,13 @@ int main()
                 }
             }
         };
-        
+
+        camera_data.position = glm::vec4(g_camera.position(), 0.f);
+        camera_data.viewproj = g_camera.projection(window_extent.width, window_extent.height) * g_camera.view();
+        std::memcpy(reinterpret_cast<char*>(camera_data_memory_ptr) + current_frame * camera_data_padded_size, &camera_data, sizeof(camera_data));
+        // TODO flush buffer before descriptor set update?
+        update_descriptor_set(logical_device, descriptor_sets[current_frame], camera_data_buffer, current_frame * camera_data_padded_size, camera_data_padded_size);
+
         const auto render_pass_begin_info = VkRenderPassBeginInfo{
             .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
             .pNext = nullptr,
@@ -1761,11 +1763,6 @@ int main()
             .clearValueCount = clear_values.size(),
             .pClearValues = clear_values.data()
         };
-
-        camera_data.position = glm::vec4(g_camera.position(), 0.f);
-        camera_data.viewproj = g_camera.projection(window_extent.width, window_extent.height) * g_camera.view();
-        std::memcpy(reinterpret_cast<char*>(camera_data_memory_ptr) + current_frame * camera_data_padded_size, &camera_data, sizeof(camera_data));
-        update_descriptor_set(logical_device, descriptor_sets[current_frame], camera_data_buffer, current_frame * camera_data_padded_size, camera_data_padded_size);
 
         vkCmdBeginRenderPass(command_buffer, &render_pass_begin_info, VK_SUBPASS_CONTENTS_INLINE);
 
@@ -1780,6 +1777,9 @@ int main()
         vkCmdDraw(command_buffer, 6, 1, 0, 0);
 
         gui::draw(command_buffer);
+
+        vkCmdEndRenderPass(command_buffer);
+        VK_CHECK(vkEndCommandBuffer(command_buffer));
 
         const auto wait_semaphores = std::array{image_available_semaphore};
         const auto wait_stages = VkPipelineStageFlags{VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
@@ -1796,9 +1796,6 @@ int main()
             .signalSemaphoreCount = 1,
             .pSignalSemaphores = signal_semaphores.data(),
         };
-
-        vkCmdEndRenderPass(command_buffer);
-        VK_CHECK(vkEndCommandBuffer(command_buffer));
 
         VK_CHECK(vkQueueSubmit(present_queue, 1, &submit_info, fence));
 
