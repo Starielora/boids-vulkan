@@ -17,7 +17,3 @@
 	path = deps/spdlog
 	url = https://github.com/gabime/spdlog.git
 	branch = v1.x
-[submodule "deps/SPIRV-Reflect"]
-	path = deps/SPIRV-Reflect
-	url = https://github.com/KhronosGroup/SPIRV-Reflect.git
-	branch = main

@@ -36,11 +36,3 @@ target_include_directories(imgui PUBLIC imgui imgui/backends)
 target_link_libraries(imgui PRIVATE glfw Vulkan::Vulkan)
 # im using volk - https://github.com/ocornut/imgui/issues/4854 https://github.com/ocornut/imgui/pull/6582
 target_compile_definitions(imgui PRIVATE VK_NO_PROTOTYPES)
-
-# SPIRV-Reflect uses CMAKE_CURRENT_SOURCE_DIR for paths which prevents adding from arbitrary directory using add_subdirectory
-add_library(spirv-reflect-static STATIC
-    SPIRV-Reflect/spirv_reflect.h
-    SPIRV-Reflect/spirv_reflect.cpp
-)
-
-target_include_directories(spirv-reflect-static PUBLIC SPIRV-Reflect)

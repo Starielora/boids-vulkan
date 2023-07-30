@@ -8,7 +8,6 @@
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_vulkan.h>
 #include <glm/glm.hpp>
-#include <spirv_reflect.h>
 
 #include <spdlog/spdlog.h>
 #include <shaders/shaders.h>
@@ -27,7 +26,7 @@
 #include <span>
 
 // TODO error message
-#define VK_CHECK(f) do { const auto result = f; if(result != VK_SUCCESS) {spdlog::error("{}: {}", #f, VkResult{result}); throw std::runtime_error("");}} while(0)
+#define VK_CHECK(f) do { const auto result = f; if(result != VK_SUCCESS) {spdlog::error("{}: {}", #f, result); throw std::runtime_error("");}} while(0)
 constexpr bool VALIDATION_LAYERS = true;
 constexpr auto depth_format = VK_FORMAT_D32_SFLOAT; // TODO query device support
 constexpr auto msaa_samples = VK_SAMPLE_COUNT_8_BIT; // TODO query device
@@ -59,18 +58,6 @@ struct vertex
 };
 
 auto read_file(const std::string_view filename)
-{
-    spdlog::debug("Reading file: {}", filename);
-    auto file = std::ifstream(filename.data(), std::ios::binary);
-    if (!file.is_open())
-    {
-        spdlog::error("Could not open file {}", filename);
-        throw std::runtime_error("");
-    }
-    return std::vector<char>(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
-}
-
-auto read_file_uint8(const std::string_view filename)
 {
     spdlog::debug("Reading file: {}", filename);
     auto file = std::ifstream(filename.data(), std::ios::binary);
@@ -577,7 +564,7 @@ auto get_swapchain_images(VkDevice logical_device, VkSwapchainKHR swapchain, VkF
     return std::tuple{images, image_views};
 }
 
-VkShaderModule create_shader_module(VkDevice logical_device, const std::vector<uint8_t>& code)
+VkShaderModule create_shader_module(VkDevice logical_device, const std::vector<uint8_t>& code, decltype(cleanup::general_queue)& cleanup_queue)
 {
     const auto create_info = VkShaderModuleCreateInfo{
         .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
@@ -590,21 +577,7 @@ VkShaderModule create_shader_module(VkDevice logical_device, const std::vector<u
     auto shader_module = VkShaderModule{};
     VK_CHECK(vkCreateShaderModule(logical_device, &create_info, nullptr, &shader_module));
 
-    return shader_module;
-}
-
-VkShaderModule create_shader_module(VkDevice logical_device, const std::vector<char>& code)
-{
-    const auto create_info = VkShaderModuleCreateInfo{
-        .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
-        .pNext = nullptr,
-        .flags = 0,
-        .codeSize = code.size(),
-        .pCode = reinterpret_cast<const uint32_t*>(code.data())
-    };
-
-    auto shader_module = VkShaderModule{};
-    VK_CHECK(vkCreateShaderModule(logical_device, &create_info, nullptr, &shader_module));
+    cleanup_queue.push([logical_device, shader_module]() { vkDestroyShaderModule(logical_device, shader_module, nullptr); });
 
     return shader_module;
 }
@@ -1095,22 +1068,25 @@ auto copy_memory(VkDevice logical_device, VkDeviceMemory device_memory, uint32_t
     vkUnmapMemory(logical_device, device_memory);
 }
 
-auto create_descriptor_set_layout(VkDevice logical_device, decltype(cleanup::general_queue)& cleanup_queue)
+auto create_descriptor_sets_layouts(VkDevice logical_device, decltype(cleanup::general_queue)& cleanup_queue)
 {
-    const auto binding = VkDescriptorSetLayoutBinding{
-        .binding = 0,
-        .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-        .descriptorCount = 1,
-        .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-        .pImmutableSamplers = nullptr
+    // I've tried reflecting spirv to determine this stuff, but it made more problems than just creating it manually here and ensuring shaders comply
+    const auto bindings = std::array{
+        VkDescriptorSetLayoutBinding{
+            .binding = 0,
+            .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+            .descriptorCount = 1,
+            .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+            .pImmutableSamplers = nullptr
+        }
     };
 
     const auto create_info = VkDescriptorSetLayoutCreateInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
         .pNext = nullptr,
         .flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT,
-        .bindingCount = 1,
-        .pBindings = &binding
+        .bindingCount = bindings.size(),
+        .pBindings = bindings.data()
     };
 
     auto layout = VkDescriptorSetLayout{};
@@ -1321,135 +1297,18 @@ namespace gui
     }
 }
 
-auto reflect_descriptor_sets(VkDevice logical_device, const std::vector<spv_reflect::ShaderModule>& spv_reflected_modules)
+auto load_shaders(VkDevice logical_device, std::initializer_list<std::string_view> shader_paths, decltype(cleanup::general_queue)& cleanup_queue)
 {
-    // map: key: descriptor set (index) value: bindings
-    auto descriptor_sets_bindings = std::vector<std::vector<VkDescriptorSetLayoutBinding>>(); // no idea how many there'll be, would need several loops
-
-    for (std::size_t i = 0; i < spv_reflected_modules.size(); ++i)
+    auto shader_modules = std::vector<VkShaderModule>();
+    shader_modules.reserve(shader_paths.size());
+    for (const auto shader_path : shader_paths)
     {
-        const auto& spv_sm = spv_reflected_modules[i];
-        const auto shader_stage = (VkShaderStageFlagBits)spv_sm.GetShaderStage(); // TODO is this cast safe? Seems so...
-
-        auto spv_descriptor_sets_count = uint32_t{};
-        spv_sm.EnumerateDescriptorSets(&spv_descriptor_sets_count, nullptr);
-        auto spv_descriptor_sets = std::vector<SpvReflectDescriptorSet*>(spv_descriptor_sets_count);
-        spv_sm.EnumerateDescriptorSets(&spv_descriptor_sets_count, spv_descriptor_sets.data());
-
-        for (std::size_t j = 0; j < spv_descriptor_sets.size(); ++j)
-        {
-            const auto& spv_descriptor_set = *spv_descriptor_sets[j];
-            assert(spv_descriptor_set.binding_count);
-            const auto spv_bindings = std::span<SpvReflectDescriptorBinding>(*spv_descriptor_set.bindings, spv_descriptor_set.binding_count);
-
-            // extend map
-            if (descriptor_sets_bindings.size() <= spv_descriptor_set.set)
-            {
-                descriptor_sets_bindings.emplace_back();
-            }
-
-            auto& bindings = descriptor_sets_bindings.at(spv_descriptor_set.set);
-
-            if (bindings.size() <= spv_bindings.size())
-            {
-                bindings.resize(spv_bindings.size());
-            }
-
-            for (std::size_t k = 0; k < spv_bindings.size(); ++k)
-            {
-                auto& binding = bindings[k];
-                const auto& spv_binding = spv_bindings[k];
-
-                binding.binding = spv_binding.binding;
-                binding.descriptorCount = 1;
-                binding.descriptorType = (VkDescriptorType)spv_binding.descriptor_type; // TODO hopefully this cast is safe as well
-                binding.stageFlags |= shader_stage;
-                binding.pImmutableSamplers = nullptr;
-            }
-        }
+        shader_modules.push_back(create_shader_module(logical_device, read_file(shader_path), cleanup_queue));
     }
 
-    auto descriptor_sets_layouts = std::vector<VkDescriptorSetLayout>(descriptor_sets_bindings.size());
-    for (std::size_t i = 0; i < descriptor_sets_bindings.size(); ++i)
-    {
-        const auto& bindings = descriptor_sets_bindings[i];
-        const auto create_info = VkDescriptorSetLayoutCreateInfo{
-            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-            .pNext = nullptr,
-            .flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT,
-            .bindingCount = static_cast<uint32_t>(bindings.size()),
-            .pBindings = bindings.data()
-        };
-
-        VK_CHECK(vkCreateDescriptorSetLayout(logical_device, &create_info, nullptr, &descriptor_sets_layouts[i]));
-    }
-
-    return descriptor_sets_layouts;
+    return shader_modules;
 }
 
-auto init_shader_stage_create_infos(VkDevice logical_device, const std::vector<std::vector<uint8_t>>& shaders, const std::vector<spv_reflect::ShaderModule>& spv_reflected_modules)
-{
-    assert(shaders.size() == spv_reflected_modules.size());
-
-    auto shader_stage_create_infos = std::vector<VkPipelineShaderStageCreateInfo>(shaders.size());
-
-    for (std::size_t i = 0; i < shaders.size(); ++i)
-    {
-        const auto shader_module = create_shader_module(logical_device, shaders[i]);
-        const auto& spv_sm = spv_reflected_modules[i];
-        const auto shader_stage = (VkShaderStageFlagBits)spv_sm.GetShaderStage(); // TODO is this cast safe? Seems so...
-
-        assert(shader_entry_point == std::string_view(spv_sm.GetEntryPointName()));
-
-        shader_stage_create_infos[i] = VkPipelineShaderStageCreateInfo{
-            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-            .pNext = nullptr,
-            .flags = 0,
-            .stage = shader_stage,
-            .module = shader_module,
-            .pName = shader_entry_point.data(),
-            .pSpecializationInfo = nullptr
-        };
-    }
-
-    return shader_stage_create_infos;
-}
-
-// Initially I had everything in one loop, in this function, but decided it will be easier to understand when split to several loops
-auto reflect_shaders(VkDevice logical_device, std::initializer_list<std::string_view> shader_paths, decltype(cleanup::general_queue)& cleanup_queue)
-{
-    auto spv_reflected_modules = std::vector<spv_reflect::ShaderModule>(shader_paths.size()); // to ensure string data lifetime, for example in GetEntryPointName()
-
-    auto shader_data = std::vector<std::vector<uint8_t>>(shader_paths.size());
-
-    for (std::size_t i = 0; const auto shader_path : shader_paths)
-    {
-        shader_data[i] = read_file_uint8(shader_path);
-        spv_reflected_modules[i] = spv_reflect::ShaderModule(shader_data[i]);
-        i++;
-    }
-
-    const auto descriptor_sets_layouts = reflect_descriptor_sets(logical_device, spv_reflected_modules);
-    const auto pipeline_layout = create_pipeline_layout(logical_device, descriptor_sets_layouts, cleanup_queue);
-    const auto shader_stages_create_infos = init_shader_stage_create_infos(logical_device, shader_data, spv_reflected_modules);
-    // TODO parse vertex input attribute. Tried it once, but I don't understand well enough how to properly calculate offset (what if shader skips location etc?)
-
-    cleanup_queue.push([logical_device, descriptor_sets_layouts]()
-    {
-        for (const auto set_layout : descriptor_sets_layouts)
-            vkDestroyDescriptorSetLayout(logical_device, set_layout, nullptr);
-    });
-
-    cleanup_queue.push([logical_device, shader_stages_create_infos]()
-    {
-        for (const auto& create_info : shader_stages_create_infos)
-        {
-            vkDestroyShaderModule(logical_device, create_info.module, nullptr);
-        }
-    });
-
-    return std::tuple{ shader_stages_create_infos, descriptor_sets_layouts, pipeline_layout };
-}
 namespace cone
 {
     // TODO potentially vertex input could be refleted from shaders
@@ -1630,9 +1489,33 @@ namespace cone
         return std::tuple{ triangle_vertex_buffer, indices };
     }
 
+    auto shader_stages = std::array{
+        VkPipelineShaderStageCreateInfo{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .stage = VK_SHADER_STAGE_VERTEX_BIT,
+            .module = 0,
+            .pName = shader_entry_point.data(),
+            .pSpecializationInfo = nullptr
+        },
+        VkPipelineShaderStageCreateInfo{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
+            .module = 0,
+            .pName = shader_entry_point.data(),
+            .pSpecializationInfo = nullptr
+        }
+    };
 
-    auto get_pipeline_create_info(VkDevice logical_device, const std::vector<VkPipelineShaderStageCreateInfo>& shader_stages, VkPipelineLayout pipeline_layout, VkRenderPass render_pass, const VkExtent2D& window_extent)
+    auto get_pipeline_create_info(VkDevice logical_device, const std::vector<VkShaderModule>& shaders, VkPipelineLayout pipeline_layout, VkRenderPass render_pass, const VkExtent2D& window_extent)
     {
+        assert(shaders.size() == shader_stages.size());
+        for (std::size_t i = 0; i < shaders.size(); ++i)
+            shader_stages[i].module = shaders[i];
+
         viewport.width = window_extent.width;
         viewport.height = window_extent.height;
 
@@ -1777,8 +1660,33 @@ namespace grid
         .blendConstants = {0.f, 0.f, 0.f, 0.f}
     };
 
-    auto get_pipeline_create_info(VkDevice logical_device, const std::vector<VkPipelineShaderStageCreateInfo>& shader_stages, VkPipelineLayout pipeline_layout, VkRenderPass render_pass, VkExtent2D window_extent)
+    auto shader_stages = std::array{
+        VkPipelineShaderStageCreateInfo{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .stage = VK_SHADER_STAGE_VERTEX_BIT,
+            .module = 0,
+            .pName = shader_entry_point.data(),
+            .pSpecializationInfo = nullptr
+        },
+        VkPipelineShaderStageCreateInfo{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
+            .module = 0,
+            .pName = shader_entry_point.data(),
+            .pSpecializationInfo = nullptr
+        }
+    };
+
+    auto get_pipeline_create_info(VkDevice logical_device, const std::vector<VkShaderModule>& shaders, VkPipelineLayout pipeline_layout, VkRenderPass render_pass, const VkExtent2D& window_extent)
     {
+        assert(shaders.size() == shader_stages.size());
+        for (std::size_t i = 0; i < shaders.size(); ++i)
+            shader_stages[i].module = shaders[i];
+
         viewport.width = window_extent.width;
         viewport.height = window_extent.height;
 
@@ -1810,21 +1718,18 @@ namespace grid
     }
 }
 
-auto recreate_graphics_pipeline_and_swapchain(GLFWwindow* window, VkDevice logical_device, VkPhysicalDevice physical_device, const std::vector<std::vector<VkPipelineShaderStageCreateInfo>>& shader_stages, const std::vector<VkPipelineLayout>& pipeline_layouts, VkRenderPass render_pass, VkSurfaceKHR surface, uint32_t queue_family_index, VkFormat swapchain_format, decltype(cleanup::general_queue)& cleanup_queue)
+auto recreate_graphics_pipeline_and_swapchain(GLFWwindow* window, VkDevice logical_device, VkPhysicalDevice physical_device, const std::vector<std::vector<VkShaderModule>>& shader_modules, VkPipelineLayout pipeline_layout, VkRenderPass render_pass, VkSurfaceKHR surface, uint32_t queue_family_index, VkFormat swapchain_format, decltype(cleanup::general_queue)& cleanup_queue)
 {
     const auto window_extent = window::get_extent(window);
     spdlog::info("New extent: {}, {}", window_extent.width, window_extent.height);
 
-    assert(shader_stages.size() == 2);
-    assert(pipeline_layouts.size() == 2);
-    const auto& cone_shader_stages = shader_stages[0];
-    const auto& cone_pipeline_layout = pipeline_layouts[0];
-    const auto& grid_shader_stages = shader_stages[1];
-    const auto& grid_pipeline_layout = pipeline_layouts[1];
+    assert(shader_modules.size() == 2);
+    const auto& cone_shaders = shader_modules[0];
+    const auto& grid_shaders = shader_modules[1];
 
     auto graphics_pipelines = create_graphics_pipelines(logical_device, {
-        cone::get_pipeline_create_info(logical_device, cone_shader_stages, cone_pipeline_layout, render_pass, window_extent),
-        grid::get_pipeline_create_info(logical_device, grid_shader_stages, grid_pipeline_layout, render_pass, window_extent),
+        cone::get_pipeline_create_info(logical_device, cone_shaders, pipeline_layout, render_pass, window_extent),
+        grid::get_pipeline_create_info(logical_device, grid_shaders, pipeline_layout, render_pass, window_extent),
     }, cleanup_queue);
     const auto [swapchain, surface_format] = create_swapchain(logical_device, physical_device, surface, queue_family_index, window_extent, cleanup_queue);
     const auto [swapchain_images, swapchain_image_views] = get_swapchain_images(logical_device, swapchain, surface_format.format, cleanup_queue);
@@ -1876,12 +1781,14 @@ int main()
     auto [swapchain_images, swapchain_image_views] = get_swapchain_images(logical_device, swapchain, surface_format.format, cleanup::swapchain_queue);
 
     const auto render_pass = create_render_pass(logical_device, surface_format.format, depth_format, msaa_samples, cleanup::general_queue);
-    const auto [cone_shader_stages, cone_descriptor_sets_layouts, cone_pipeline_layout] = reflect_shaders(logical_device, { shader_path::vertex::triangle, shader_path::fragment::triangle }, cleanup::general_queue);
-    const auto [grid_shader_stages, grid_descriptor_sets_layouts, grid_pipeline_layout] = reflect_shaders(logical_device, { shader_path::vertex::grid, shader_path::fragment::grid }, cleanup::general_queue);
+    const auto descriptor_sets_layouts = create_descriptor_sets_layouts(logical_device, cleanup::general_queue);
+    const auto pipeline_layout = create_pipeline_layout(logical_device, { descriptor_sets_layouts }, cleanup::general_queue);
+    const auto cone_shaders = load_shaders(logical_device, { shader_path::vertex::triangle, shader_path::fragment::triangle }, cleanup::general_queue);
+    const auto grid_shaders = load_shaders(logical_device, { shader_path::vertex::grid, shader_path::fragment::grid }, cleanup::general_queue);
 
     auto graphics_pipelines = create_graphics_pipelines(logical_device, {
-        cone::get_pipeline_create_info(logical_device, cone_shader_stages, cone_pipeline_layout, render_pass, window_extent),
-        grid::get_pipeline_create_info(logical_device, grid_shader_stages, grid_pipeline_layout, render_pass, window_extent),
+        cone::get_pipeline_create_info(logical_device, cone_shaders, pipeline_layout, render_pass, window_extent),
+        grid::get_pipeline_create_info(logical_device, grid_shaders, pipeline_layout, render_pass, window_extent),
     }, cleanup::swapchain_queue);
 
     auto& cone_pipeline = graphics_pipelines[0];
@@ -1891,8 +1798,7 @@ int main()
 
     const auto descriptor_pool = create_descriptor_pool(logical_device,  cleanup::general_queue);
     // TODO batch allocation to one call
-    const auto cone_descriptor_sets = allocate_descriptor_sets(logical_device, cone_descriptor_sets_layouts, descriptor_pool, overlapping_frames_count);
-    const auto grid_descriptor_sets = allocate_descriptor_sets(logical_device, grid_descriptor_sets_layouts, descriptor_pool, overlapping_frames_count);
+    const auto descriptor_sets = allocate_descriptor_sets(logical_device, { descriptor_sets_layouts }, descriptor_pool, overlapping_frames_count);
 
     struct
     {
@@ -1954,7 +1860,7 @@ int main()
                 spdlog::info("Destroy swapchain objects.");
                 cleanup::flush(cleanup::swapchain_queue);
 
-                std::tie(graphics_pipelines, window_extent, swapchain, surface_format, swapchain_images, swapchain_image_views, swapchain_framebuffers, color_image, color_image_memory, color_image_view, depth_image, depth_image_view, depth_image_memory) = recreate_graphics_pipeline_and_swapchain(window, logical_device, physical_device, { cone_shader_stages, grid_shader_stages }, { cone_pipeline_layout, grid_pipeline_layout }, render_pass, surface, queue_family_index, surface_format.format, cleanup::swapchain_queue);
+                std::tie(graphics_pipelines, window_extent, swapchain, surface_format, swapchain_images, swapchain_image_views, swapchain_framebuffers, color_image, color_image_memory, color_image_view, depth_image, depth_image_view, depth_image_memory) = recreate_graphics_pipeline_and_swapchain(window, logical_device, physical_device, { cone_shaders, grid_shaders }, pipeline_layout, render_pass, surface, queue_family_index, surface_format.format, cleanup::swapchain_queue);
                 cone_pipeline = graphics_pipelines[0];
                 grid_pipeline = graphics_pipelines[1];
                 continue;
@@ -1995,9 +1901,7 @@ int main()
         camera_data.viewproj = g_camera.projection(window_extent.width, window_extent.height) * g_camera.view();
         std::memcpy(reinterpret_cast<char*>(camera_data_memory_ptr) + current_frame * camera_data_padded_size, &camera_data, sizeof(camera_data));
         // TODO flush buffer before descriptor set update?
-        // TODO batch update
-        update_descriptor_set(logical_device, cone_descriptor_sets[current_frame], camera_data_buffer, current_frame * camera_data_padded_size, camera_data_padded_size);
-        update_descriptor_set(logical_device, grid_descriptor_sets[current_frame], camera_data_buffer, current_frame * camera_data_padded_size, camera_data_padded_size);
+        update_descriptor_set(logical_device, descriptor_sets[current_frame], camera_data_buffer, current_frame * camera_data_padded_size, camera_data_padded_size);
 
         const auto render_pass_begin_info = VkRenderPassBeginInfo{
             .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
@@ -2014,14 +1918,14 @@ int main()
 
         vkCmdBeginRenderPass(command_buffer, &render_pass_begin_info, VK_SUBPASS_CONTENTS_INLINE);
 
-        vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, cone_pipeline_layout, 0, 1, &cone_descriptor_sets[current_frame], 0, nullptr);
+        vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout, 0, 1, &descriptor_sets[current_frame], 0, nullptr);
         vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, cone_pipeline);
         const auto offsets = std::array{ VkDeviceSize{ 0 } };
         vkCmdBindVertexBuffers(command_buffer, 0, 1, &vertex_buffer, offsets.data());
         vkCmdBindIndexBuffer(command_buffer, vertex_buffer, cone_vertex_buffer_size, VK_INDEX_TYPE_UINT16);
         vkCmdDrawIndexed(command_buffer, cone_index_buffer.size(), 1, 0, 0, 0);
 
-        vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, grid_pipeline_layout, 0, 1, &grid_descriptor_sets[current_frame], 0, nullptr);
+        vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout, 0, 1, &descriptor_sets[current_frame], 0, nullptr);
         vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, grid_pipeline);
         vkCmdDraw(command_buffer, 6, 1, 0, 0);
 
