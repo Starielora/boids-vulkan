@@ -8,6 +8,7 @@
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_vulkan.h>
 #include <glm/glm.hpp>
+#include <spirv_reflect.h>
 
 #include <spdlog/spdlog.h>
 #include <shaders/shaders.h>
@@ -23,12 +24,14 @@
 #include <numbers>
 #include <cmath>
 #include <stack>
+#include <span>
 
 // TODO error message
-#define VK_CHECK(f) do { const auto result = f; if(result != VK_SUCCESS) throw std::runtime_error("");} while(0)
+#define VK_CHECK(f) do { const auto result = f; if(result != VK_SUCCESS) {spdlog::error("{}: {}", #f, VkResult{result}); throw std::runtime_error("");}} while(0)
 constexpr bool VALIDATION_LAYERS = true;
 constexpr auto depth_format = VK_FORMAT_D32_SFLOAT; // TODO query device support
 constexpr auto msaa_samples = VK_SAMPLE_COUNT_8_BIT; // TODO query device
+constexpr auto shader_entry_point = std::string_view("main");
 
 camera g_camera;
 bool g_gui_mode = false;
@@ -65,6 +68,18 @@ auto read_file(const std::string_view filename)
         throw std::runtime_error("");
     }
     return std::vector<char>(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
+}
+
+auto read_file_uint8(const std::string_view filename)
+{
+    spdlog::debug("Reading file: {}", filename);
+    auto file = std::ifstream(filename.data(), std::ios::binary);
+    if (!file.is_open())
+    {
+        spdlog::error("Could not open file {}", filename);
+        throw std::runtime_error("");
+    }
+    return std::vector<uint8_t>(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
 }
 
 namespace window
@@ -562,6 +577,22 @@ auto get_swapchain_images(VkDevice logical_device, VkSwapchainKHR swapchain, VkF
     return std::tuple{images, image_views};
 }
 
+VkShaderModule create_shader_module(VkDevice logical_device, const std::vector<uint8_t>& code)
+{
+    const auto create_info = VkShaderModuleCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .codeSize = code.size(),
+        .pCode = reinterpret_cast<const uint32_t*>(code.data())
+    };
+
+    auto shader_module = VkShaderModule{};
+    VK_CHECK(vkCreateShaderModule(logical_device, &create_info, nullptr, &shader_module));
+
+    return shader_module;
+}
+
 VkShaderModule create_shader_module(VkDevice logical_device, const std::vector<char>& code)
 {
     const auto create_info = VkShaderModuleCreateInfo{
@@ -706,260 +737,10 @@ auto create_pipeline_layout(VkDevice logical_device, const std::vector<VkDescrip
     return pipeline_layout;
 }
 
-auto create_graphics_pipelines(VkDevice logical_device, VkRenderPass render_pass, VkPipelineLayout pipeline_layout, VkExtent2D swapchain_extent, VkFormat swapchain_format, VkFormat depth_format, decltype(cleanup::general_queue)& cleanup_queue)
+auto create_graphics_pipelines(VkDevice logical_device, const std::vector<VkGraphicsPipelineCreateInfo>& create_infos, decltype(cleanup::general_queue)& cleanup_queue)
 {
-    spdlog::info("Loading shaders");
-    const auto triangle_vertex_shader = create_shader_module(logical_device, read_file(shader_path::vertex::triangle));
-    const auto triangle_fragment_shader = create_shader_module(logical_device, read_file(shader_path::fragment::triangle));
-    const auto grid_vertex_shader = create_shader_module(logical_device, read_file(shader_path::vertex::grid));
-    const auto grid_fragment_shader = create_shader_module(logical_device, read_file(shader_path::fragment::grid));
-
-    const auto triangle_shader_stage_create_infos = std::array{
-        VkPipelineShaderStageCreateInfo{
-            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-            .pNext = nullptr,
-            .flags = 0,
-            .stage = VK_SHADER_STAGE_VERTEX_BIT,
-            .module = triangle_vertex_shader,
-            .pName = "main",
-            .pSpecializationInfo = nullptr
-        },
-        VkPipelineShaderStageCreateInfo{
-            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-            .pNext = nullptr,
-            .flags = 0,
-            .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
-            .module = triangle_fragment_shader,
-            .pName = "main",
-            .pSpecializationInfo = nullptr
-        },
-    };
-
-    const auto grid_shader_stage_create_infos = std::array{
-        VkPipelineShaderStageCreateInfo{
-            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-            .pNext = nullptr,
-            .flags = 0,
-            .stage = VK_SHADER_STAGE_VERTEX_BIT,
-            .module = grid_vertex_shader,
-            .pName = "main",
-            .pSpecializationInfo = nullptr
-        },
-        VkPipelineShaderStageCreateInfo{
-            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-            .pNext = nullptr,
-            .flags = 0,
-            .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
-            .module = grid_fragment_shader,
-            .pName = "main",
-            .pSpecializationInfo = nullptr
-        }
-    };
-
-    const auto bindingDescription = VkVertexInputBindingDescription{
-        .binding = 0,
-        .stride = 2 * sizeof(glm::vec3),
-        .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
-    };
-
-    const auto vertexAttributeDescriptions = std::array{
-        VkVertexInputAttributeDescription{
-            .location = 0,
-            .binding = 0,
-            .format = VK_FORMAT_R32G32B32_SFLOAT,
-            .offset = 0
-        },
-        VkVertexInputAttributeDescription{
-            .location = 1,
-            .binding = 0,
-            .format = VK_FORMAT_R32G32B32_SFLOAT,
-            .offset = sizeof glm::vec3
-        },
-    };
-
-    const auto triangle_vertex_input_create_info = VkPipelineVertexInputStateCreateInfo{
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
-        .pNext = nullptr,
-        .flags = 0,
-        .vertexBindingDescriptionCount = 1,
-        .pVertexBindingDescriptions = &bindingDescription,
-        .vertexAttributeDescriptionCount = vertexAttributeDescriptions.size(),
-        .pVertexAttributeDescriptions = vertexAttributeDescriptions.data()
-    };
-
-    const auto grid_vertex_input_create_info = VkPipelineVertexInputStateCreateInfo{
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
-        .pNext = nullptr,
-        .flags = 0,
-        .vertexBindingDescriptionCount = 0,
-        .pVertexBindingDescriptions = nullptr,
-        .vertexAttributeDescriptionCount = 0,
-        .pVertexAttributeDescriptions = nullptr
-    };
-
-    const auto input_assembly_create_info = VkPipelineInputAssemblyStateCreateInfo{
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
-        .pNext = nullptr,
-        .flags = 0,
-        .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
-        .primitiveRestartEnable = VK_FALSE
-    };
-
-    const auto viewport = VkViewport{
-        .x = 0.f,
-        .y = 0.f,
-        .width = static_cast<float>(swapchain_extent.width),
-        .height = static_cast<float>(swapchain_extent.height),
-        .minDepth = 0.f,
-        .maxDepth = 1.f
-    };
-
-    const auto scissors = VkRect2D{
-        .offset = VkOffset2D{
-            .x = 0,
-            .y = 0,
-        },
-        .extent = swapchain_extent
-    };
-
-    const auto viewport_state_create_info = VkPipelineViewportStateCreateInfo{
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
-        .pNext = nullptr,
-        .flags = 0,
-        .viewportCount = 1,
-        .pViewports = &viewport,
-        .scissorCount = 1,
-        .pScissors = &scissors,
-    };
-
-    const auto triangle_rasterization_state_create_info = VkPipelineRasterizationStateCreateInfo{
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
-        .pNext = nullptr,
-        .flags = 0,
-        .depthClampEnable = VK_FALSE,
-        .rasterizerDiscardEnable = VK_FALSE,
-        .polygonMode = VK_POLYGON_MODE_LINE,
-        .cullMode = VK_CULL_MODE_BACK_BIT,
-        .frontFace = VK_FRONT_FACE_CLOCKWISE,
-        .depthBiasEnable = VK_FALSE,
-        .depthBiasConstantFactor = 0.f,
-        .depthBiasClamp = 0.f,
-        .depthBiasSlopeFactor = 0.f,
-        .lineWidth = 2.f
-    };
-
-    const auto grid_rasterization_state_create_info = VkPipelineRasterizationStateCreateInfo{
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
-        .pNext = nullptr,
-        .flags = 0,
-        .depthClampEnable = VK_FALSE,
-        .rasterizerDiscardEnable = VK_FALSE,
-        .polygonMode = VK_POLYGON_MODE_FILL,
-        .cullMode = VK_CULL_MODE_NONE,
-        .frontFace = VK_FRONT_FACE_CLOCKWISE,
-        .depthBiasEnable = VK_FALSE,
-        .depthBiasConstantFactor = 0.f,
-        .depthBiasClamp = 0.f,
-        .depthBiasSlopeFactor = 0.f,
-        .lineWidth = 1.f
-    };
-
-    const auto multisample_state_create_info = VkPipelineMultisampleStateCreateInfo{
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
-        .pNext = nullptr,
-        .flags = 0,
-        .rasterizationSamples = msaa_samples,
-        .sampleShadingEnable = VK_FALSE,
-        .minSampleShading = 1.f,
-        .pSampleMask = nullptr,
-        .alphaToCoverageEnable = VK_FALSE,
-        .alphaToOneEnable = VK_FALSE
-    };
-
-    const auto depth_stencil_state_create_info = VkPipelineDepthStencilStateCreateInfo{
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
-        .pNext = nullptr,
-        .flags = 0,
-        .depthTestEnable = VK_TRUE,
-        .depthWriteEnable = VK_TRUE,
-        .depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL,
-        .depthBoundsTestEnable = VK_FALSE,
-        .stencilTestEnable = VK_FALSE,
-        .front = {},
-        .back = {},
-        .minDepthBounds = 0.f,
-        .maxDepthBounds = 1.f
-    };
-
-    const auto color_blend_attachment_state = VkPipelineColorBlendAttachmentState{
-        .blendEnable = VK_TRUE,
-        .srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA,
-        .dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
-        .colorBlendOp = VK_BLEND_OP_ADD,
-        .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
-        .dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO,
-        .alphaBlendOp = VK_BLEND_OP_ADD,
-        .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT
-    };
-
-    const auto color_blend_state_create_info = VkPipelineColorBlendStateCreateInfo{
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
-        .pNext = nullptr,
-        .flags = 0,
-        .logicOpEnable = VK_FALSE,
-        .logicOp = VK_LOGIC_OP_COPY,
-        .attachmentCount = 1,
-        .pAttachments = &color_blend_attachment_state,
-        .blendConstants = {0.f, 0.f, 0.f, 0.f}
-    };
-
-    const auto pipeline_create_infos = std::array{
-        VkGraphicsPipelineCreateInfo{
-            .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
-            .pNext = nullptr,
-            .flags = 0,
-            .stageCount = triangle_shader_stage_create_infos.size(),
-            .pStages = triangle_shader_stage_create_infos.data(),
-            .pVertexInputState = &triangle_vertex_input_create_info,
-            .pInputAssemblyState = &input_assembly_create_info,
-            .pTessellationState = nullptr,
-            .pViewportState = &viewport_state_create_info,
-            .pRasterizationState = &triangle_rasterization_state_create_info,
-            .pMultisampleState = &multisample_state_create_info,
-            .pDepthStencilState = &depth_stencil_state_create_info,
-            .pColorBlendState = &color_blend_state_create_info,
-            .pDynamicState = nullptr,
-            .layout = pipeline_layout,
-            .renderPass = render_pass,
-            .subpass = 0,
-            .basePipelineHandle = VK_NULL_HANDLE,
-            .basePipelineIndex = 0
-        },
-        VkGraphicsPipelineCreateInfo{
-            .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
-            .pNext = nullptr,
-            .flags = 0,
-            .stageCount = grid_shader_stage_create_infos.size(),
-            .pStages = grid_shader_stage_create_infos.data(),
-            .pVertexInputState = &grid_vertex_input_create_info,
-            .pInputAssemblyState = &input_assembly_create_info,
-            .pTessellationState = nullptr,
-            .pViewportState = &viewport_state_create_info,
-            .pRasterizationState = &grid_rasterization_state_create_info,
-            .pMultisampleState = &multisample_state_create_info,
-            .pDepthStencilState = &depth_stencil_state_create_info,
-            .pColorBlendState = &color_blend_state_create_info,
-            .pDynamicState = nullptr,
-            .layout = pipeline_layout,
-            .renderPass = render_pass,
-            .subpass = 0,
-            .basePipelineHandle = VK_NULL_HANDLE,
-            .basePipelineIndex = 0
-        }
-    };
-
-    auto pipelines = std::array{ VkPipeline{ 0 }, VkPipeline{ 0 }};
-    vkCreateGraphicsPipelines(logical_device, VK_NULL_HANDLE, pipeline_create_infos.size(), pipeline_create_infos.data(), nullptr, pipelines.data());
+    auto pipelines = std::vector<VkPipeline>(create_infos.size());
+    vkCreateGraphicsPipelines(logical_device, VK_NULL_HANDLE, create_infos.size(), create_infos.data(), nullptr, pipelines.data());
 
     cleanup_queue.push([logical_device, pipelines]() {
         for (const auto pipeline : pipelines)
@@ -967,13 +748,7 @@ auto create_graphics_pipelines(VkDevice logical_device, VkRenderPass render_pass
             vkDestroyPipeline(logical_device, pipeline, nullptr);
         }
     });
-
-    vkDestroyShaderModule(logical_device, triangle_vertex_shader, nullptr);
-    vkDestroyShaderModule(logical_device, triangle_fragment_shader, nullptr);
-    vkDestroyShaderModule(logical_device, grid_vertex_shader, nullptr);
-    vkDestroyShaderModule(logical_device, grid_fragment_shader, nullptr);
-
-    return std::tuple{ pipelines[0], pipelines[1] };
+    return pipelines;
 }
 
 auto create_swapchain_framebuffers(VkDevice logical_device, VkRenderPass render_pass, const std::vector<VkImageView>& color_imageviews, const std::vector<VkImageView>& swapchain_imageviews, const std::vector<VkImageView> depth_image_views, VkExtent2D swapchain_extent, decltype(cleanup::general_queue)& cleanup_queue)
@@ -1248,23 +1023,6 @@ auto create_depth_image(VkDevice logical_device, VkPhysicalDevice physical_devic
     return std::tuple{ image, view, memory };
 }
 
-auto recreate_graphics_pipeline_and_swapchain(GLFWwindow* window, VkDevice logical_device, VkPhysicalDevice physical_device, VkRenderPass render_pass, VkPipelineLayout pipeline_layout, VkSurfaceKHR surface, uint32_t queue_family_index, VkFormat swapchain_format, decltype(cleanup::general_queue)& cleanup_queue)
-{
-    const auto window_extent = window::get_extent(window);
-
-    // TODO reuse old pipeline handle for faster recreation
-    const auto [triangle_pipeline, grid_pipeline] = create_graphics_pipelines(logical_device, render_pass, pipeline_layout, window_extent, swapchain_format, depth_format, cleanup_queue);
-    const auto [swapchain, surface_format] = create_swapchain(logical_device, physical_device, surface, queue_family_index, window_extent, cleanup_queue);
-    const auto [swapchain_images, swapchain_image_views] = get_swapchain_images(logical_device, swapchain, surface_format.format, cleanup_queue);
-
-    auto [color_image, color_image_view, color_image_memory] = create_color_image(logical_device, physical_device, swapchain_format, window_extent, cleanup_queue);
-    auto [depth_image, depth_image_view, depth_image_memory] = create_depth_image(logical_device, physical_device, window_extent, cleanup_queue);
-
-    const auto swapchain_framebuffers = create_swapchain_framebuffers(logical_device, render_pass, { color_image_view }, swapchain_image_views, { depth_image_view }, window_extent, cleanup_queue);
-
-    return std::tuple{ triangle_pipeline, grid_pipeline, window_extent, swapchain, surface_format, swapchain_images, swapchain_image_views, swapchain_framebuffers, color_image, color_image_memory, color_image_view, depth_image, depth_image_view, depth_image_memory };
-}
-
 void handle_keyboard(GLFWwindow* window, camera& camera)
 {
     if (glfwGetKey(window, GLFW_KEY_ESCAPE))
@@ -1367,7 +1125,7 @@ auto create_descriptor_pool(VkDevice logical_device, decltype(cleanup::general_q
 {
     const auto pool_size = VkDescriptorPoolSize{
         .type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-        .descriptorCount = 2
+        .descriptorCount = 16 // TODO should be enough for now
     };
 
     const auto pool_sizes = std::array { pool_size };
@@ -1376,7 +1134,7 @@ auto create_descriptor_pool(VkDevice logical_device, decltype(cleanup::general_q
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
         .pNext = nullptr,
         .flags = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT,
-        .maxSets = 2,
+        .maxSets = 16, // TODO should be enough for now
         .poolSizeCount = pool_sizes.size(),
         .pPoolSizes = pool_sizes.data()
     };
@@ -1389,18 +1147,28 @@ auto create_descriptor_pool(VkDevice logical_device, decltype(cleanup::general_q
     return pool;
 }
 
-auto allocate_descriptor_sets(VkDevice logical_device, const VkDescriptorSetLayout& layout, const VkDescriptorPool& pool, std::size_t count)
+auto allocate_descriptor_sets(VkDevice logical_device, const std::vector<VkDescriptorSetLayout>& in_set_layouts, const VkDescriptorPool& pool, std::size_t frame_overlap)
 {
-    const auto set_layouts = std::vector<VkDescriptorSetLayout>(count, layout);
+    auto set_layouts = std::vector<VkDescriptorSetLayout>();
+    set_layouts.reserve(in_set_layouts.size() * frame_overlap);
+
+    for (const auto& set_layout : in_set_layouts)
+    {
+        for (std::size_t i = 0; i < frame_overlap; ++i)
+        {
+            set_layouts.push_back(set_layout);
+        }
+    }
+
     const auto allocate_info = VkDescriptorSetAllocateInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
         .pNext = nullptr,
         .descriptorPool = pool,
-        .descriptorSetCount = static_cast<uint32_t>(count),
+        .descriptorSetCount = static_cast<uint32_t>(set_layouts.size()),
         .pSetLayouts = set_layouts.data()
     };
 
-    auto sets = std::vector<VkDescriptorSet>(count);
+    auto sets = std::vector<VkDescriptorSet>(set_layouts.size());
     VK_CHECK(vkAllocateDescriptorSets(logical_device, &allocate_info, sets.data()));
 
     return sets;
@@ -1514,7 +1282,6 @@ namespace gui
         imgui_vulkan_window.Swapchain = swapchain;
 
         {
-            // Use any command queue
             VK_CHECK(vkResetCommandPool(logical_device, command_pool, 0));
             VkCommandBufferBeginInfo begin_info = {};
             begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -1554,8 +1321,269 @@ namespace gui
     }
 }
 
+auto reflect_descriptor_sets(VkDevice logical_device, const std::vector<spv_reflect::ShaderModule>& spv_reflected_modules)
+{
+    // map: key: descriptor set (index) value: bindings
+    auto descriptor_sets_bindings = std::vector<std::vector<VkDescriptorSetLayoutBinding>>(); // no idea how many there'll be, would need several loops
+
+    for (std::size_t i = 0; i < spv_reflected_modules.size(); ++i)
+    {
+        const auto& spv_sm = spv_reflected_modules[i];
+        const auto shader_stage = (VkShaderStageFlagBits)spv_sm.GetShaderStage(); // TODO is this cast safe? Seems so...
+
+        auto spv_descriptor_sets_count = uint32_t{};
+        spv_sm.EnumerateDescriptorSets(&spv_descriptor_sets_count, nullptr);
+        auto spv_descriptor_sets = std::vector<SpvReflectDescriptorSet*>(spv_descriptor_sets_count);
+        spv_sm.EnumerateDescriptorSets(&spv_descriptor_sets_count, spv_descriptor_sets.data());
+
+        for (std::size_t j = 0; j < spv_descriptor_sets.size(); ++j)
+        {
+            const auto& spv_descriptor_set = *spv_descriptor_sets[j];
+            assert(spv_descriptor_set.binding_count);
+            const auto spv_bindings = std::span<SpvReflectDescriptorBinding>(*spv_descriptor_set.bindings, spv_descriptor_set.binding_count);
+
+            // extend map
+            if (descriptor_sets_bindings.size() <= spv_descriptor_set.set)
+            {
+                descriptor_sets_bindings.emplace_back();
+            }
+
+            auto& bindings = descriptor_sets_bindings.at(spv_descriptor_set.set);
+
+            if (bindings.size() <= spv_bindings.size())
+            {
+                bindings.resize(spv_bindings.size());
+            }
+
+            for (std::size_t k = 0; k < spv_bindings.size(); ++k)
+            {
+                auto& binding = bindings[k];
+                const auto& spv_binding = spv_bindings[k];
+
+                binding.binding = spv_binding.binding;
+                binding.descriptorCount = 1;
+                binding.descriptorType = (VkDescriptorType)spv_binding.descriptor_type; // TODO hopefully this cast is safe as well
+                binding.stageFlags |= shader_stage;
+                binding.pImmutableSamplers = nullptr;
+            }
+        }
+    }
+
+    auto descriptor_sets_layouts = std::vector<VkDescriptorSetLayout>(descriptor_sets_bindings.size());
+    for (std::size_t i = 0; i < descriptor_sets_bindings.size(); ++i)
+    {
+        const auto& bindings = descriptor_sets_bindings[i];
+        const auto create_info = VkDescriptorSetLayoutCreateInfo{
+            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT,
+            .bindingCount = static_cast<uint32_t>(bindings.size()),
+            .pBindings = bindings.data()
+        };
+
+        VK_CHECK(vkCreateDescriptorSetLayout(logical_device, &create_info, nullptr, &descriptor_sets_layouts[i]));
+    }
+
+    return descriptor_sets_layouts;
+}
+
+auto init_shader_stage_create_infos(VkDevice logical_device, const std::vector<std::vector<uint8_t>>& shaders, const std::vector<spv_reflect::ShaderModule>& spv_reflected_modules)
+{
+    assert(shaders.size() == spv_reflected_modules.size());
+
+    auto shader_stage_create_infos = std::vector<VkPipelineShaderStageCreateInfo>(shaders.size());
+
+    for (std::size_t i = 0; i < shaders.size(); ++i)
+    {
+        const auto shader_module = create_shader_module(logical_device, shaders[i]);
+        const auto& spv_sm = spv_reflected_modules[i];
+        const auto shader_stage = (VkShaderStageFlagBits)spv_sm.GetShaderStage(); // TODO is this cast safe? Seems so...
+
+        assert(shader_entry_point == std::string_view(spv_sm.GetEntryPointName()));
+
+        shader_stage_create_infos[i] = VkPipelineShaderStageCreateInfo{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .stage = shader_stage,
+            .module = shader_module,
+            .pName = shader_entry_point.data(),
+            .pSpecializationInfo = nullptr
+        };
+    }
+
+    return shader_stage_create_infos;
+}
+
+// Initially I had everything in one loop, in this function, but decided it will be easier to understand when split to several loops
+auto reflect_shaders(VkDevice logical_device, std::initializer_list<std::string_view> shader_paths, decltype(cleanup::general_queue)& cleanup_queue)
+{
+    auto spv_reflected_modules = std::vector<spv_reflect::ShaderModule>(shader_paths.size()); // to ensure string data lifetime, for example in GetEntryPointName()
+
+    auto shader_data = std::vector<std::vector<uint8_t>>(shader_paths.size());
+
+    for (std::size_t i = 0; const auto shader_path : shader_paths)
+    {
+        shader_data[i] = read_file_uint8(shader_path);
+        spv_reflected_modules[i] = spv_reflect::ShaderModule(shader_data[i]);
+        i++;
+    }
+
+    const auto descriptor_sets_layouts = reflect_descriptor_sets(logical_device, spv_reflected_modules);
+    const auto pipeline_layout = create_pipeline_layout(logical_device, descriptor_sets_layouts, cleanup_queue);
+    const auto shader_stages_create_infos = init_shader_stage_create_infos(logical_device, shader_data, spv_reflected_modules);
+    // TODO parse vertex input attribute. Tried it once, but I don't understand well enough how to properly calculate offset (what if shader skips location etc?)
+
+    cleanup_queue.push([logical_device, descriptor_sets_layouts]()
+    {
+        for (const auto set_layout : descriptor_sets_layouts)
+            vkDestroyDescriptorSetLayout(logical_device, set_layout, nullptr);
+    });
+
+    cleanup_queue.push([logical_device, shader_stages_create_infos]()
+    {
+        for (const auto& create_info : shader_stages_create_infos)
+        {
+            vkDestroyShaderModule(logical_device, create_info.module, nullptr);
+        }
+    });
+
+    return std::tuple{ shader_stages_create_infos, descriptor_sets_layouts, pipeline_layout };
+}
 namespace cone
 {
+    // TODO potentially vertex input could be refleted from shaders
+    constexpr auto bindingDescription = VkVertexInputBindingDescription{
+        .binding = 0,
+        .stride = 2 * sizeof(glm::vec3),
+        .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
+    };
+
+    constexpr auto vertexAttributeDescriptions = std::array{
+        VkVertexInputAttributeDescription{
+            .location = 0,
+            .binding = 0,
+            .format = VK_FORMAT_R32G32B32_SFLOAT,
+            .offset = 0
+        },
+        VkVertexInputAttributeDescription{
+            .location = 1,
+            .binding = 0,
+            .format = VK_FORMAT_R32G32B32_SFLOAT,
+            .offset = sizeof glm::vec3
+        },
+    };
+
+    const auto vertex_input_state = VkPipelineVertexInputStateCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .vertexBindingDescriptionCount = 1,
+        .pVertexBindingDescriptions = &bindingDescription,
+        .vertexAttributeDescriptionCount = vertexAttributeDescriptions.size(),
+        .pVertexAttributeDescriptions = vertexAttributeDescriptions.data()
+    };
+
+    constexpr auto input_assembly_state = VkPipelineInputAssemblyStateCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+        .primitiveRestartEnable = VK_FALSE
+    };
+
+    auto viewport = VkViewport{
+        .x = 0.f,
+        .y = 0.f,
+        .width = 0.f,
+        .height = 0.f,
+        .minDepth = 0.f,
+        .maxDepth = 1.f
+    };
+
+    auto scissors = VkRect2D{
+        .offset = VkOffset2D{
+            .x = 0,
+            .y = 0,
+        },
+        .extent = {}
+    };
+
+    const auto viewport_state = VkPipelineViewportStateCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .viewportCount = 1,
+        .pViewports = &viewport,
+        .scissorCount = 1,
+        .pScissors = &scissors,
+    };
+
+    constexpr auto rasterization_state = VkPipelineRasterizationStateCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .depthClampEnable = VK_FALSE,
+        .rasterizerDiscardEnable = VK_FALSE,
+        .polygonMode = VK_POLYGON_MODE_LINE,
+        .cullMode = VK_CULL_MODE_BACK_BIT,
+        .frontFace = VK_FRONT_FACE_CLOCKWISE,
+        .depthBiasEnable = VK_FALSE,
+        .depthBiasConstantFactor = 0.f,
+        .depthBiasClamp = 0.f,
+        .depthBiasSlopeFactor = 0.f,
+        .lineWidth = 2.f
+    };
+
+    constexpr auto multisample_state = VkPipelineMultisampleStateCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .rasterizationSamples = msaa_samples,
+        .sampleShadingEnable = VK_FALSE,
+        .minSampleShading = 1.f,
+        .pSampleMask = nullptr,
+        .alphaToCoverageEnable = VK_FALSE,
+        .alphaToOneEnable = VK_FALSE
+    };
+
+    constexpr auto depth_stencil_state = VkPipelineDepthStencilStateCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .depthTestEnable = VK_TRUE,
+        .depthWriteEnable = VK_TRUE,
+        .depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL,
+        .depthBoundsTestEnable = VK_FALSE,
+        .stencilTestEnable = VK_FALSE,
+        .front = {},
+        .back = {},
+        .minDepthBounds = 0.f,
+        .maxDepthBounds = 1.f
+    };
+
+    constexpr auto color_blend_attachment_state = VkPipelineColorBlendAttachmentState{
+        .blendEnable = VK_TRUE,
+        .srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA,
+        .dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+        .colorBlendOp = VK_BLEND_OP_ADD,
+        .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
+        .dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO,
+        .alphaBlendOp = VK_BLEND_OP_ADD,
+        .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT
+    };
+
+    const auto color_blend_state = VkPipelineColorBlendStateCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .logicOpEnable = VK_FALSE,
+        .logicOp = VK_LOGIC_OP_COPY,
+        .attachmentCount = 1,
+        .pAttachments = &color_blend_attachment_state,
+        .blendConstants = {0.f, 0.f, 0.f, 0.f}
+    };
+
     auto generate_vertex_data()
     {
         constexpr auto base_vertices_count = 12;
@@ -1601,6 +1629,212 @@ namespace cone
 
         return std::tuple{ triangle_vertex_buffer, indices };
     }
+
+
+    auto get_pipeline_create_info(VkDevice logical_device, const std::vector<VkPipelineShaderStageCreateInfo>& shader_stages, VkPipelineLayout pipeline_layout, VkRenderPass render_pass, const VkExtent2D& window_extent)
+    {
+        viewport.width = window_extent.width;
+        viewport.height = window_extent.height;
+
+        scissors.extent = window_extent;
+
+        const auto create_info = VkGraphicsPipelineCreateInfo{
+            .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .stageCount = static_cast<uint32_t>(shader_stages.size()),
+            .pStages = shader_stages.data(),
+            .pVertexInputState = &vertex_input_state,
+            .pInputAssemblyState = &input_assembly_state,
+            .pTessellationState = nullptr,
+            .pViewportState = &viewport_state,
+            .pRasterizationState = &rasterization_state,
+            .pMultisampleState = &multisample_state,
+            .pDepthStencilState = &depth_stencil_state,
+            .pColorBlendState = &color_blend_state,
+            .pDynamicState = nullptr,
+            .layout = pipeline_layout,
+            .renderPass = render_pass,
+            .subpass = 0,
+            .basePipelineHandle = VK_NULL_HANDLE,
+            .basePipelineIndex = 0
+        };
+
+        return create_info;
+    }
+}
+
+namespace grid
+{
+    // TODO potentially vertex input could be refleted from shaders
+    constexpr auto vertex_input_state = VkPipelineVertexInputStateCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .vertexBindingDescriptionCount = 0,
+        .pVertexBindingDescriptions = nullptr,
+        .vertexAttributeDescriptionCount = 0,
+        .pVertexAttributeDescriptions = nullptr
+    };
+
+    constexpr auto input_assembly_state = VkPipelineInputAssemblyStateCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+        .primitiveRestartEnable = VK_FALSE
+    };
+
+    auto viewport = VkViewport{
+        .x = 0.f,
+        .y = 0.f,
+        .width = 0.f,
+        .height = 0.f,
+        .minDepth = 0.f,
+        .maxDepth = 1.f
+    };
+
+    auto scissors = VkRect2D{
+        .offset = VkOffset2D{
+            .x = 0,
+            .y = 0,
+        },
+        .extent = {}
+    };
+
+    const auto viewport_state = VkPipelineViewportStateCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .viewportCount = 1,
+        .pViewports = &viewport,
+        .scissorCount = 1,
+        .pScissors = &scissors,
+    };
+
+    constexpr auto rasterization_state = VkPipelineRasterizationStateCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .depthClampEnable = VK_FALSE,
+        .rasterizerDiscardEnable = VK_FALSE,
+        .polygonMode = VK_POLYGON_MODE_FILL,
+        .cullMode = VK_CULL_MODE_BACK_BIT,
+        .frontFace = VK_FRONT_FACE_CLOCKWISE,
+        .depthBiasEnable = VK_FALSE,
+        .depthBiasConstantFactor = 0.f,
+        .depthBiasClamp = 0.f,
+        .depthBiasSlopeFactor = 0.f,
+        .lineWidth = 2.f
+    };
+
+    constexpr auto multisample_state = VkPipelineMultisampleStateCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .rasterizationSamples = msaa_samples,
+        .sampleShadingEnable = VK_FALSE,
+        .minSampleShading = 1.f,
+        .pSampleMask = nullptr,
+        .alphaToCoverageEnable = VK_FALSE,
+        .alphaToOneEnable = VK_FALSE
+    };
+
+    constexpr auto depth_stencil_state = VkPipelineDepthStencilStateCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .depthTestEnable = VK_TRUE,
+        .depthWriteEnable = VK_TRUE,
+        .depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL,
+        .depthBoundsTestEnable = VK_FALSE,
+        .stencilTestEnable = VK_FALSE,
+        .front = {},
+        .back = {},
+        .minDepthBounds = 0.f,
+        .maxDepthBounds = 1.f
+    };
+
+    constexpr auto color_blend_attachment_state = VkPipelineColorBlendAttachmentState{
+        .blendEnable = VK_TRUE,
+        .srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA,
+        .dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+        .colorBlendOp = VK_BLEND_OP_ADD,
+        .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
+        .dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO,
+        .alphaBlendOp = VK_BLEND_OP_ADD,
+        .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT
+    };
+
+    const auto color_blend_state = VkPipelineColorBlendStateCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .logicOpEnable = VK_FALSE,
+        .logicOp = VK_LOGIC_OP_COPY,
+        .attachmentCount = 1,
+        .pAttachments = &color_blend_attachment_state,
+        .blendConstants = {0.f, 0.f, 0.f, 0.f}
+    };
+
+    auto get_pipeline_create_info(VkDevice logical_device, const std::vector<VkPipelineShaderStageCreateInfo>& shader_stages, VkPipelineLayout pipeline_layout, VkRenderPass render_pass, VkExtent2D window_extent)
+    {
+        viewport.width = window_extent.width;
+        viewport.height = window_extent.height;
+
+        scissors.extent = window_extent;
+
+        const auto create_info = VkGraphicsPipelineCreateInfo{
+            .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .stageCount = static_cast<uint32_t>(shader_stages.size()),
+            .pStages = shader_stages.data(),
+            .pVertexInputState = &vertex_input_state,
+            .pInputAssemblyState = &input_assembly_state,
+            .pTessellationState = nullptr,
+            .pViewportState = &viewport_state,
+            .pRasterizationState = &rasterization_state,
+            .pMultisampleState = &multisample_state,
+            .pDepthStencilState = &depth_stencil_state,
+            .pColorBlendState = &color_blend_state,
+            .pDynamicState = nullptr,
+            .layout = pipeline_layout,
+            .renderPass = render_pass,
+            .subpass = 0,
+            .basePipelineHandle = VK_NULL_HANDLE,
+            .basePipelineIndex = 0
+        };
+
+        return create_info;
+    }
+}
+
+auto recreate_graphics_pipeline_and_swapchain(GLFWwindow* window, VkDevice logical_device, VkPhysicalDevice physical_device, const std::vector<std::vector<VkPipelineShaderStageCreateInfo>>& shader_stages, const std::vector<VkPipelineLayout>& pipeline_layouts, VkRenderPass render_pass, VkSurfaceKHR surface, uint32_t queue_family_index, VkFormat swapchain_format, decltype(cleanup::general_queue)& cleanup_queue)
+{
+    const auto window_extent = window::get_extent(window);
+    spdlog::info("New extent: {}, {}", window_extent.width, window_extent.height);
+
+    assert(shader_stages.size() == 2);
+    assert(pipeline_layouts.size() == 2);
+    const auto& cone_shader_stages = shader_stages[0];
+    const auto& cone_pipeline_layout = pipeline_layouts[0];
+    const auto& grid_shader_stages = shader_stages[1];
+    const auto& grid_pipeline_layout = pipeline_layouts[1];
+
+    auto graphics_pipelines = create_graphics_pipelines(logical_device, {
+        cone::get_pipeline_create_info(logical_device, cone_shader_stages, cone_pipeline_layout, render_pass, window_extent),
+        grid::get_pipeline_create_info(logical_device, grid_shader_stages, grid_pipeline_layout, render_pass, window_extent),
+    }, cleanup_queue);
+    const auto [swapchain, surface_format] = create_swapchain(logical_device, physical_device, surface, queue_family_index, window_extent, cleanup_queue);
+    const auto [swapchain_images, swapchain_image_views] = get_swapchain_images(logical_device, swapchain, surface_format.format, cleanup_queue);
+
+    auto [color_image, color_image_view, color_image_memory] = create_color_image(logical_device, physical_device, swapchain_format, window_extent, cleanup_queue);
+    auto [depth_image, depth_image_view, depth_image_memory] = create_depth_image(logical_device, physical_device, window_extent, cleanup_queue);
+
+    const auto swapchain_framebuffers = create_swapchain_framebuffers(logical_device, render_pass, { color_image_view }, swapchain_image_views, { depth_image_view }, window_extent, cleanup_queue);
+
+    return std::tuple{ graphics_pipelines, window_extent, swapchain, surface_format, swapchain_images, swapchain_image_views, swapchain_framebuffers, color_image, color_image_memory, color_image_view, depth_image, depth_image_view, depth_image_memory };
 }
 
 int main()
@@ -1642,14 +1876,23 @@ int main()
     auto [swapchain_images, swapchain_image_views] = get_swapchain_images(logical_device, swapchain, surface_format.format, cleanup::swapchain_queue);
 
     const auto render_pass = create_render_pass(logical_device, surface_format.format, depth_format, msaa_samples, cleanup::general_queue);
-    const auto camera_data_descriptor_set_layout = create_descriptor_set_layout(logical_device, cleanup::general_queue);
-    const auto pipeline_layout = create_pipeline_layout(logical_device, { camera_data_descriptor_set_layout }, cleanup::general_queue);
-    auto [cone_pipeline, grid_pipeline] = create_graphics_pipelines(logical_device, render_pass, pipeline_layout, window_extent, surface_format.format, depth_format, cleanup::swapchain_queue);
+    const auto [cone_shader_stages, cone_descriptor_sets_layouts, cone_pipeline_layout] = reflect_shaders(logical_device, { shader_path::vertex::triangle, shader_path::fragment::triangle }, cleanup::general_queue);
+    const auto [grid_shader_stages, grid_descriptor_sets_layouts, grid_pipeline_layout] = reflect_shaders(logical_device, { shader_path::vertex::grid, shader_path::fragment::grid }, cleanup::general_queue);
+
+    auto graphics_pipelines = create_graphics_pipelines(logical_device, {
+        cone::get_pipeline_create_info(logical_device, cone_shader_stages, cone_pipeline_layout, render_pass, window_extent),
+        grid::get_pipeline_create_info(logical_device, grid_shader_stages, grid_pipeline_layout, render_pass, window_extent),
+    }, cleanup::swapchain_queue);
+
+    auto& cone_pipeline = graphics_pipelines[0];
+    auto& grid_pipeline = graphics_pipelines[1];
 
     constexpr auto overlapping_frames_count = 2;
 
-    const auto descriptor_pool = create_descriptor_pool(logical_device, cleanup::general_queue);
-    const auto descriptor_sets = allocate_descriptor_sets(logical_device, camera_data_descriptor_set_layout, descriptor_pool, overlapping_frames_count);
+    const auto descriptor_pool = create_descriptor_pool(logical_device,  cleanup::general_queue);
+    // TODO batch allocation to one call
+    const auto cone_descriptor_sets = allocate_descriptor_sets(logical_device, cone_descriptor_sets_layouts, descriptor_pool, overlapping_frames_count);
+    const auto grid_descriptor_sets = allocate_descriptor_sets(logical_device, grid_descriptor_sets_layouts, descriptor_pool, overlapping_frames_count);
 
     struct
     {
@@ -1708,9 +1951,12 @@ int main()
                 spdlog::info("Swapchain images no longer match native surface properties. Recreating swapchain.");
                 VK_CHECK(vkDeviceWaitIdle(logical_device));
 
+                spdlog::info("Destroy swapchain objects.");
                 cleanup::flush(cleanup::swapchain_queue);
 
-                std::tie(cone_pipeline, grid_pipeline, window_extent, swapchain, surface_format, swapchain_images, swapchain_image_views, swapchain_framebuffers, color_image, color_image_memory, color_image_view, depth_image, depth_image_view, depth_image_memory) = recreate_graphics_pipeline_and_swapchain(window, logical_device, physical_device, render_pass, pipeline_layout, surface, queue_family_index, surface_format.format, cleanup::swapchain_queue);
+                std::tie(graphics_pipelines, window_extent, swapchain, surface_format, swapchain_images, swapchain_image_views, swapchain_framebuffers, color_image, color_image_memory, color_image_view, depth_image, depth_image_view, depth_image_memory) = recreate_graphics_pipeline_and_swapchain(window, logical_device, physical_device, { cone_shader_stages, grid_shader_stages }, { cone_pipeline_layout, grid_pipeline_layout }, render_pass, surface, queue_family_index, surface_format.format, cleanup::swapchain_queue);
+                cone_pipeline = graphics_pipelines[0];
+                grid_pipeline = graphics_pipelines[1];
                 continue;
             }
             else if (result != VK_SUCCESS)
@@ -1749,7 +1995,9 @@ int main()
         camera_data.viewproj = g_camera.projection(window_extent.width, window_extent.height) * g_camera.view();
         std::memcpy(reinterpret_cast<char*>(camera_data_memory_ptr) + current_frame * camera_data_padded_size, &camera_data, sizeof(camera_data));
         // TODO flush buffer before descriptor set update?
-        update_descriptor_set(logical_device, descriptor_sets[current_frame], camera_data_buffer, current_frame * camera_data_padded_size, camera_data_padded_size);
+        // TODO batch update
+        update_descriptor_set(logical_device, cone_descriptor_sets[current_frame], camera_data_buffer, current_frame * camera_data_padded_size, camera_data_padded_size);
+        update_descriptor_set(logical_device, grid_descriptor_sets[current_frame], camera_data_buffer, current_frame * camera_data_padded_size, camera_data_padded_size);
 
         const auto render_pass_begin_info = VkRenderPassBeginInfo{
             .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
@@ -1766,13 +2014,14 @@ int main()
 
         vkCmdBeginRenderPass(command_buffer, &render_pass_begin_info, VK_SUBPASS_CONTENTS_INLINE);
 
-        vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout, 0, 1, &descriptor_sets[current_frame], 0, nullptr);
+        vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, cone_pipeline_layout, 0, 1, &cone_descriptor_sets[current_frame], 0, nullptr);
         vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, cone_pipeline);
         const auto offsets = std::array{ VkDeviceSize{ 0 } };
         vkCmdBindVertexBuffers(command_buffer, 0, 1, &vertex_buffer, offsets.data());
         vkCmdBindIndexBuffer(command_buffer, vertex_buffer, cone_vertex_buffer_size, VK_INDEX_TYPE_UINT16);
         vkCmdDrawIndexed(command_buffer, cone_index_buffer.size(), 1, 0, 0, 0);
 
+        vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, grid_pipeline_layout, 0, 1, &grid_descriptor_sets[current_frame], 0, nullptr);
         vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, grid_pipeline);
         vkCmdDraw(command_buffer, 6, 1, 0, 0);
 
