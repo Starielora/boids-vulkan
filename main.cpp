@@ -1150,28 +1150,53 @@ auto allocate_descriptor_sets(VkDevice logical_device, const std::vector<VkDescr
     return sets;
 }
 
-auto update_descriptor_set(VkDevice logical_device, VkDescriptorSet descriptor_set, VkBuffer buffer, uint32_t offset, uint32_t size)
+auto create_descriptor_update_template(VkDevice logical_device, VkDescriptorSetLayout set_layout, VkPipelineLayout pipeline_layout, decltype(cleanup::general_queue)& cleanup_queue)
 {
-    const auto buffer_info = VkDescriptorBufferInfo{
-        .buffer = buffer,
-        .offset = offset,
-        .range = size
+    auto update_entries = std::array{
+        VkDescriptorUpdateTemplateEntry {
+            .dstBinding = 0,
+            .dstArrayElement = 0,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+            .offset = 0,
+            .stride = 0
+        }
     };
 
-    const auto descriptor_write = VkWriteDescriptorSet{
-        .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+    const auto create_info = VkDescriptorUpdateTemplateCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_UPDATE_TEMPLATE_CREATE_INFO,
         .pNext = nullptr,
-        .dstSet = descriptor_set,
-        .dstBinding = 0,
-        .dstArrayElement = 0,
-        .descriptorCount = 1,
-        .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-        .pImageInfo = nullptr,
-        .pBufferInfo = &buffer_info,
-        .pTexelBufferView = nullptr
+        .flags = 0,
+        .descriptorUpdateEntryCount = update_entries.size(),
+        .pDescriptorUpdateEntries = update_entries.data(),
+        .templateType = VK_DESCRIPTOR_UPDATE_TEMPLATE_TYPE_DESCRIPTOR_SET,
+        .descriptorSetLayout = set_layout,
+        .pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
+        .pipelineLayout = pipeline_layout,
+        .set = 0
     };
 
-    vkUpdateDescriptorSets(logical_device, 1, &descriptor_write, 0, nullptr);
+    auto update_template = VkDescriptorUpdateTemplate{};
+    VK_CHECK(vkCreateDescriptorUpdateTemplate(logical_device, &create_info, nullptr, &update_template));
+
+    cleanup_queue.push([logical_device, update_template]() { vkDestroyDescriptorUpdateTemplate(logical_device, update_template, nullptr); });
+
+    return update_template;
+}
+
+auto get_descriptor_buffer_infos(VkBuffer buffer, std::size_t size, std::size_t frame_overlap)
+{
+    auto infos = std::vector<VkDescriptorBufferInfo>(frame_overlap);
+    for (std::size_t i = 0; i < frame_overlap; ++i)
+    {
+        infos[i] = VkDescriptorBufferInfo{
+            .buffer = buffer,
+            .offset = i * size,
+            .range = size
+        };
+    }
+
+    return infos;
 }
 
 auto pad_uniform_buffer_size(std::size_t original_size, std::size_t min_uniform_buffer_alignment)
@@ -1781,8 +1806,8 @@ int main()
     auto [swapchain_images, swapchain_image_views] = get_swapchain_images(logical_device, swapchain, surface_format.format, cleanup::swapchain_queue);
 
     const auto render_pass = create_render_pass(logical_device, surface_format.format, depth_format, msaa_samples, cleanup::general_queue);
-    const auto descriptor_sets_layouts = create_descriptor_sets_layouts(logical_device, cleanup::general_queue);
-    const auto pipeline_layout = create_pipeline_layout(logical_device, { descriptor_sets_layouts }, cleanup::general_queue);
+    const auto descriptor_set_layout = create_descriptor_sets_layouts(logical_device, cleanup::general_queue);
+    const auto pipeline_layout = create_pipeline_layout(logical_device, { descriptor_set_layout }, cleanup::general_queue);
     const auto cone_shaders = load_shaders(logical_device, { shader_path::vertex::triangle, shader_path::fragment::triangle }, cleanup::general_queue);
     const auto grid_shaders = load_shaders(logical_device, { shader_path::vertex::grid, shader_path::fragment::grid }, cleanup::general_queue);
 
@@ -1797,8 +1822,8 @@ int main()
     constexpr auto overlapping_frames_count = 2;
 
     const auto descriptor_pool = create_descriptor_pool(logical_device,  cleanup::general_queue);
-    // TODO batch allocation to one call
-    const auto descriptor_sets = allocate_descriptor_sets(logical_device, { descriptor_sets_layouts }, descriptor_pool, overlapping_frames_count);
+    const auto descriptor_sets = allocate_descriptor_sets(logical_device, { descriptor_set_layout }, descriptor_pool, overlapping_frames_count);
+    const auto descriptor_update_template = create_descriptor_update_template(logical_device, descriptor_set_layout, pipeline_layout, cleanup::general_queue);
 
     struct
     {
@@ -1810,6 +1835,8 @@ int main()
     const auto [camera_data_buffer, camera_data_memory] = create_buffer(logical_device, physical_device, overlapping_frames_count * camera_data_padded_size, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, cleanup::general_queue);
     void* camera_data_memory_ptr = nullptr;
     VK_CHECK(vkMapMemory(logical_device, camera_data_memory, 0, VK_WHOLE_SIZE, 0, &camera_data_memory_ptr));
+
+    const auto descriptor_buffer_infos = get_descriptor_buffer_infos(camera_data_buffer, camera_data_padded_size, overlapping_frames_count);
 
     auto [color_image, color_image_view, color_image_memory] = create_color_image(logical_device, physical_device, surface_format.format, window_extent, cleanup::swapchain_queue);
     auto [depth_image, depth_image_view, depth_image_memory] = create_depth_image(logical_device, physical_device, window_extent, cleanup::swapchain_queue);
@@ -1901,7 +1928,8 @@ int main()
         camera_data.viewproj = g_camera.projection(window_extent.width, window_extent.height) * g_camera.view();
         std::memcpy(reinterpret_cast<char*>(camera_data_memory_ptr) + current_frame * camera_data_padded_size, &camera_data, sizeof(camera_data));
         // TODO flush buffer before descriptor set update?
-        update_descriptor_set(logical_device, descriptor_sets[current_frame], camera_data_buffer, current_frame * camera_data_padded_size, camera_data_padded_size);
+
+        vkUpdateDescriptorSetWithTemplate(logical_device, descriptor_sets[current_frame], descriptor_update_template, &descriptor_buffer_infos[current_frame]);
 
         const auto render_pass_begin_info = VkRenderPassBeginInfo{
             .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
