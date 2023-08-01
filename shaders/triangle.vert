@@ -11,11 +11,11 @@ layout(set = 0, binding = 0) uniform CameraData
     mat4 projview;
 } camera_data;
 
-layout(set = 0, binding = 1) uniform ModelData{
-    mat4 matrix;
+layout(set = 0, binding = 1) readonly buffer ModelData{
+    mat4 matrix[];
 } model;
 
 void main() {
-    gl_Position = camera_data.projview * model.matrix * vec4(pos, 1.0);
+    gl_Position = camera_data.projview * model.matrix[gl_InstanceIndex] * vec4(pos, 1.0);
     fragColor = color;
 }

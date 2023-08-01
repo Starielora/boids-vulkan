@@ -1083,7 +1083,7 @@ auto create_descriptor_sets_layouts(VkDevice logical_device, decltype(cleanup::g
         },
         VkDescriptorSetLayoutBinding{
             .binding = 1,
-            .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
             .descriptorCount = 1,
             .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
             .pImmutableSamplers = nullptr
@@ -1174,7 +1174,7 @@ auto create_descriptor_update_template(VkDevice logical_device, VkDescriptorSetL
             .dstBinding = 1,
             .dstArrayElement = 0,
             .descriptorCount = 1,
-            .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
             .offset = sizeof(VkDescriptorBufferInfo), // TODO lmao, fix this shit. It's an offset in pData array of vkCmdUpdateDescriptorSetWithTemplate
             .stride = 0
         },
@@ -1866,10 +1866,11 @@ int main()
         glm::mat4 viewproj;
     } camera_data;
 
+    constexpr auto instances_count = 100;
     struct
     {
         glm::mat4 model_matrix = glm::mat4(1.);
-    } model_data;
+    } model_data[instances_count];
 
     const auto camera_data_padded_size = pad_uniform_buffer_size(sizeof(camera_data), physical_device_properties.limits.minUniformBufferOffsetAlignment);
     const auto [camera_data_buffer, camera_data_memory] = create_buffer(logical_device, physical_device, overlapping_frames_count * camera_data_padded_size, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, cleanup::general_queue);
@@ -1878,7 +1879,7 @@ int main()
     const auto camera_data_descriptor_buffer_infos = get_descriptor_buffer_infos(camera_data_buffer, camera_data_padded_size, overlapping_frames_count);
 
     const auto model_data_padded_size = pad_uniform_buffer_size(sizeof(model_data), physical_device_properties.limits.minUniformBufferOffsetAlignment);
-    const auto [model_data_buffer, model_data_memory] = create_buffer(logical_device, physical_device, overlapping_frames_count * model_data_padded_size, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, cleanup::general_queue);
+    const auto [model_data_buffer, model_data_memory] = create_buffer(logical_device, physical_device, overlapping_frames_count * model_data_padded_size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, cleanup::general_queue);
     void* model_data_memory_ptr = nullptr;
     VK_CHECK(vkMapMemory(logical_device, model_data_memory, 0, VK_WHOLE_SIZE, 0, &model_data_memory_ptr));
     const auto model_data_descriptor_buffer_infos = get_descriptor_buffer_infos(model_data_buffer, model_data_padded_size, overlapping_frames_count);
@@ -1973,9 +1974,13 @@ int main()
         camera_data.viewproj = flip_clip_space * g_camera.projection(window_extent.width, window_extent.height) * g_camera.view();
         std::memcpy(reinterpret_cast<char*>(camera_data_memory_ptr) + current_frame * camera_data_padded_size, &camera_data, sizeof(camera_data));
         // TODO flush buffer before descriptor set update?
-        model_data.model_matrix = glm::translate(glm::mat4(1.), gui::model_pos);
-        model_data.model_matrix = model_data.model_matrix * glm::toMat4(glm::rotation({ 0, 1, 0 }, glm::normalize(gui::model_dir)));
-        model_data.model_matrix = glm::scale(model_data.model_matrix, gui::model_scale);
+        for (std::size_t i = 0; i < instances_count; ++i)
+        {
+            auto& model = model_data[i];
+            model.model_matrix = glm::translate(glm::mat4(1.), gui::model_pos + glm::vec3((int(i)%10 - 5), 0, (int(i) / 10) - 5));
+            model.model_matrix = model.model_matrix * glm::toMat4(glm::rotation({0, 1, 0}, glm::normalize(gui::model_dir)));
+            model.model_matrix = glm::scale(model.model_matrix, gui::model_scale * glm::vec3(0.5));
+        }
         std::memcpy(reinterpret_cast<char*>(model_data_memory_ptr) + current_frame * model_data_padded_size, &model_data, sizeof(model_data));
 
         const auto buffer_infos = std::array{
@@ -2004,7 +2009,7 @@ int main()
         const auto offsets = std::array{ VkDeviceSize{ 0 } };
         vkCmdBindVertexBuffers(command_buffer, 0, 1, &vertex_buffer, offsets.data());
         vkCmdBindIndexBuffer(command_buffer, vertex_buffer, cone_vertex_buffer_size, VK_INDEX_TYPE_UINT16);
-        vkCmdDrawIndexed(command_buffer, cone_index_buffer.size(), 1, 0, 0, 0);
+        vkCmdDrawIndexed(command_buffer, cone_index_buffer.size(), instances_count, 0, 0, 0);
 
         vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout, 0, 1, &descriptor_sets[current_frame], 0, nullptr);
         vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, grid_pipeline);
