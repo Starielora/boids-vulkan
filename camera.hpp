@@ -1,5 +1,6 @@
 #pragma once
 
+#define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -11,36 +12,42 @@ class camera final
 	float _pitch = 0.0f;
 	float _fov = 45.0f;
 
-	glm::vec3 _camera_pos = glm::vec3(0.0f, -1.0f, 3.0f);
-	glm::vec3 _camera_front = glm::vec3(0.0f, 0.0f, -1.0f);
+	glm::vec3 _camera_pos = glm::vec3(0.0f, 1.0f, 3.0f);
+	glm::vec3 _camera_dir = glm::vec3(0.0f, 0.0f, -1.0f);
 	glm::vec3 _camera_up = glm::vec3(0.0f, 1.0f, 0.0f);
+	glm::vec3 _camera_right = glm::vec3();
 
 public:
 
 	auto& position() { return _camera_pos; }
+	auto& up() { return _camera_up; }
+	auto& front() { return _camera_dir; }
 	auto& fov() { return _fov; }
+	auto& right() { return _camera_right; }
 
 	auto projection(float width, float height) { return glm::perspective(glm::radians(_fov), width / height, 0.1f, 100.f); }
-	auto view() { return glm::lookAt(_camera_pos, _camera_pos + _camera_front, _camera_up); }
+	auto view() {
+		return glm::lookAtLH(_camera_pos + _camera_dir, _camera_pos, _camera_up);
+	}
 
 	void move_forward()
 	{
-		_camera_pos += _speed * _camera_front;
+		_camera_pos += _speed * _camera_dir;
 	}
 
 	void move_back()
 	{
-		_camera_pos -= _speed * _camera_front;
+		_camera_pos -= _speed * _camera_dir;
 	}
 
 	void strafe_left()
 	{
-		_camera_pos -= glm::normalize(glm::cross(_camera_front, _camera_up)) * _speed;
+		_camera_pos -= glm::normalize(glm::cross(_camera_dir, _camera_up)) * _speed;
 	}
 
 	void strafe_right()
 	{
-		_camera_pos += glm::normalize(glm::cross(_camera_front, _camera_up)) * _speed;
+		_camera_pos += glm::normalize(glm::cross(_camera_dir, _camera_up)) * _speed;
 	}
 
 	void fov(float offset)
@@ -78,10 +85,10 @@ public:
 
 		glm::vec3 direction;
 		direction.x = cos(glm::radians(_yaw)) * cos(glm::radians(_pitch));
-		direction.y = -sin(glm::radians(_pitch));
+		direction.y = sin(glm::radians(_pitch));
 		direction.z = sin(glm::radians(_yaw)) * cos(glm::radians(_pitch));
-		_camera_front = glm::normalize(direction);
-		const auto camera_right = glm::normalize(glm::cross(_camera_front, {0, 1, 0}));
-		_camera_up = glm::normalize(glm::cross(camera_right, _camera_front));
+		_camera_dir = glm::normalize(direction);
+		_camera_right = glm::normalize(glm::cross(_camera_dir, {0, 1, 0}));
+		_camera_up = glm::normalize(glm::cross(_camera_right, _camera_dir));
 	}
 };

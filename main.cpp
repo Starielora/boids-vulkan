@@ -8,6 +8,7 @@
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_vulkan.h>
 #include <glm/glm.hpp>
+#include <glm/gtx/quaternion.hpp>
 
 #include <spdlog/spdlog.h>
 #include <shaders/shaders.h>
@@ -35,6 +36,7 @@ constexpr auto shader_entry_point = std::string_view("main");
 camera g_camera;
 bool g_gui_mode = false;
 glm::vec2 gui_mode_mouse_pos{};
+const auto flip_clip_space = glm::scale(glm::mat4(1.), glm::vec3(1, -1, 1));
 
 namespace cleanup
 {
@@ -1078,6 +1080,13 @@ auto create_descriptor_sets_layouts(VkDevice logical_device, decltype(cleanup::g
             .descriptorCount = 1,
             .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
             .pImmutableSamplers = nullptr
+        },
+        VkDescriptorSetLayoutBinding{
+            .binding = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+            .descriptorCount = 1,
+            .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
+            .pImmutableSamplers = nullptr
         }
     };
 
@@ -1160,7 +1169,15 @@ auto create_descriptor_update_template(VkDevice logical_device, VkDescriptorSetL
             .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
             .offset = 0,
             .stride = 0
-        }
+        },
+        VkDescriptorUpdateTemplateEntry {
+            .dstBinding = 1,
+            .dstArrayElement = 0,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+            .offset = sizeof(VkDescriptorBufferInfo), // TODO lmao, fix this shit. It's an offset in pData array of vkCmdUpdateDescriptorSetWithTemplate
+            .stride = 0
+        },
     };
 
     const auto create_info = VkDescriptorUpdateTemplateCreateInfo{
@@ -1213,6 +1230,13 @@ auto pad_uniform_buffer_size(std::size_t original_size, std::size_t min_uniform_
 
 namespace gui
 {
+    auto model_pos = glm::vec3(0., 0., 0.);
+    auto model_rot = glm::vec3(0., 0., 0.);
+    auto model_scale = glm::vec3(1., 1., 1.);
+    auto model_dir = glm::vec3(0., 1.f, 0.f);
+    auto model_right = glm::vec3(1., 0., 0.);
+    auto model_up = glm::vec3(0.f, 0.f, 1.f);
+
     auto create_descriptor_pool(VkDevice logical_device, decltype(cleanup::general_queue)& cleanup_queue)
     {
         // from imgui vulkan_glfw example
@@ -1314,7 +1338,18 @@ namespace gui
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
 
-        ImGui::ShowDemoWindow();
+        ImGui::DragFloat3("dir", &model_dir[0], 0.01f, -1.f, 1.f);
+        ImGui::Text("Camera");
+        const auto pos_str = fmt::format("({: .2f}, {: .2f}, {: .2f})", g_camera.position().x, g_camera.position().y, g_camera.position().z);
+        const auto up_str = fmt::format("({: .2f}, {: .2f}, {: .2f})", g_camera.up().x, g_camera.up().y, g_camera.up().z);
+        const auto front_str = fmt::format("({: .2f}, {: .2f}, {: .2f})", g_camera.front().x, g_camera.front().y, g_camera.front().z);
+        const auto right_str = fmt::format("({: .2f}, {: .2f}, {: .2f})", g_camera.right().x, g_camera.right().y, g_camera.right().z);
+        ImGui::Text(fmt::format("{: <10} {:>}", "pos:", pos_str).c_str());
+        ImGui::Text(fmt::format("{: <10} {:>}", "up:", up_str).c_str());
+        ImGui::Text(fmt::format("{: <10} {:>}", "front:", front_str).c_str());
+        ImGui::Text(fmt::format("{: <10} {:>}", "right:", right_str).c_str());
+
+        //ImGui::ShowDemoWindow();
 
         ImGui::Render();
         ImDrawData* draw_data = ImGui::GetDrawData();
@@ -1411,7 +1446,7 @@ namespace cone
         .rasterizerDiscardEnable = VK_FALSE,
         .polygonMode = VK_POLYGON_MODE_LINE,
         .cullMode = VK_CULL_MODE_BACK_BIT,
-        .frontFace = VK_FRONT_FACE_CLOCKWISE,
+        .frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE,
         .depthBiasEnable = VK_FALSE,
         .depthBiasConstantFactor = 0.f,
         .depthBiasClamp = 0.f,
@@ -1478,9 +1513,9 @@ namespace cone
         for (std::size_t i = 0; i < base_vertices_count; ++i)
         {
             const auto angle = i * angle_step;
-            vertices[i+1] = glm::vec3(std::cos(angle), -2.f, -std::sin(angle));
+            vertices[i+1] = glm::vec3(std::cos(angle), 0.f, std::sin(angle));
         }
-        vertices[vertices.size() - 1] = glm::vec3(0, -2.f, 0);
+        vertices[vertices.size() - 1] = glm::vec3(0, 2.f, 0);
 
         const auto triangles_count = base_vertices_count * 2 * 3;
         auto indices = std::vector<uint16_t>(triangles_count);
@@ -1627,7 +1662,7 @@ namespace grid
         .depthClampEnable = VK_FALSE,
         .rasterizerDiscardEnable = VK_FALSE,
         .polygonMode = VK_POLYGON_MODE_FILL,
-        .cullMode = VK_CULL_MODE_BACK_BIT,
+        .cullMode = VK_CULL_MODE_NONE,
         .frontFace = VK_FRONT_FACE_CLOCKWISE,
         .depthBiasEnable = VK_FALSE,
         .depthBiasConstantFactor = 0.f,
@@ -1831,12 +1866,22 @@ int main()
         glm::mat4 viewproj;
     } camera_data;
 
+    struct
+    {
+        glm::mat4 model_matrix = glm::mat4(1.);
+    } model_data;
+
     const auto camera_data_padded_size = pad_uniform_buffer_size(sizeof(camera_data), physical_device_properties.limits.minUniformBufferOffsetAlignment);
     const auto [camera_data_buffer, camera_data_memory] = create_buffer(logical_device, physical_device, overlapping_frames_count * camera_data_padded_size, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, cleanup::general_queue);
     void* camera_data_memory_ptr = nullptr;
     VK_CHECK(vkMapMemory(logical_device, camera_data_memory, 0, VK_WHOLE_SIZE, 0, &camera_data_memory_ptr));
+    const auto camera_data_descriptor_buffer_infos = get_descriptor_buffer_infos(camera_data_buffer, camera_data_padded_size, overlapping_frames_count);
 
-    const auto descriptor_buffer_infos = get_descriptor_buffer_infos(camera_data_buffer, camera_data_padded_size, overlapping_frames_count);
+    const auto model_data_padded_size = pad_uniform_buffer_size(sizeof(model_data), physical_device_properties.limits.minUniformBufferOffsetAlignment);
+    const auto [model_data_buffer, model_data_memory] = create_buffer(logical_device, physical_device, overlapping_frames_count * model_data_padded_size, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, cleanup::general_queue);
+    void* model_data_memory_ptr = nullptr;
+    VK_CHECK(vkMapMemory(logical_device, model_data_memory, 0, VK_WHOLE_SIZE, 0, &model_data_memory_ptr));
+    const auto model_data_descriptor_buffer_infos = get_descriptor_buffer_infos(model_data_buffer, model_data_padded_size, overlapping_frames_count);
 
     auto [color_image, color_image_view, color_image_memory] = create_color_image(logical_device, physical_device, surface_format.format, window_extent, cleanup::swapchain_queue);
     auto [depth_image, depth_image_view, depth_image_memory] = create_depth_image(logical_device, physical_device, window_extent, cleanup::swapchain_queue);
@@ -1925,11 +1970,19 @@ int main()
         };
 
         camera_data.position = glm::vec4(g_camera.position(), 0.f);
-        camera_data.viewproj = g_camera.projection(window_extent.width, window_extent.height) * g_camera.view();
+        camera_data.viewproj = flip_clip_space * g_camera.projection(window_extent.width, window_extent.height) * g_camera.view();
         std::memcpy(reinterpret_cast<char*>(camera_data_memory_ptr) + current_frame * camera_data_padded_size, &camera_data, sizeof(camera_data));
         // TODO flush buffer before descriptor set update?
+        model_data.model_matrix = glm::translate(glm::mat4(1.), gui::model_pos);
+        model_data.model_matrix = model_data.model_matrix * glm::toMat4(glm::rotation({ 0, 1, 0 }, glm::normalize(gui::model_dir)));
+        model_data.model_matrix = glm::scale(model_data.model_matrix, gui::model_scale);
+        std::memcpy(reinterpret_cast<char*>(model_data_memory_ptr) + current_frame * model_data_padded_size, &model_data, sizeof(model_data));
 
-        vkUpdateDescriptorSetWithTemplate(logical_device, descriptor_sets[current_frame], descriptor_update_template, &descriptor_buffer_infos[current_frame]);
+        const auto buffer_infos = std::array{
+            camera_data_descriptor_buffer_infos[current_frame],
+            model_data_descriptor_buffer_infos[current_frame]
+        };
+        vkUpdateDescriptorSetWithTemplate(logical_device, descriptor_sets[current_frame], descriptor_update_template, buffer_infos.data());
 
         const auto render_pass_begin_info = VkRenderPassBeginInfo{
             .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,

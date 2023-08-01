@@ -12,6 +12,7 @@ layout(location = 1) in float grid_size;
 
 #define PI 3.1415
 #define AXIS
+#define ARROWS
 
 void main()
 {
@@ -72,5 +73,26 @@ void main()
         const float s = smoothstep(line_width - aa_width, line_width, length_xy);
         out_color = mix(blue_line, out_color, s);
     }
+
+    #ifdef ARROWS
+    if (world_pos.x > 0.75 && world_pos.x < 1.0 && world_pos.z > -0.25 && world_pos.z < 0.25)
+    {
+        float z1 = world_pos.x - 1.f;
+        float z2 = -world_pos.x + 1.f;
+        float delta1 = abs(z1) - abs(world_pos.z);
+        float delta2 = abs(z2) - abs(world_pos.z);
+        if (delta1 > 0. && delta2 > 0.)
+            out_color = vec4(1., 0., 0., 1.);
+    }
+    else if (world_pos.z > 0.75 && world_pos.z < 1.0 && world_pos.x > -0.25 && world_pos.x < 0.25)
+    {
+        float x1 = world_pos.z - 1.f;
+        float x2 = -world_pos.z + 1.f;
+        float delta1 = abs(x1) - abs(world_pos.x);
+        float delta2 = abs(x2) - abs(world_pos.x);
+        if (delta1 > 0. && delta2 > 0.)
+            out_color = vec4(0., 0., 1., 1.);
+    }
+    #endif
     #endif
 }
