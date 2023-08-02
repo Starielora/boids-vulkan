@@ -60,6 +60,18 @@ project(shaders)
         VARIABLE_NAME_HEADER grid
     )
 
+    add_shader(VERTEX
+        INPUT_FILE aquarium.vert
+        OUTPUT_FILE aquarium.vert.spv
+        VARIABLE_NAME_HEADER aquarium
+    )
+
+    add_shader(FRAGMENT
+        INPUT_FILE aquarium.frag
+        OUTPUT_FILE aquarium.frag.spv
+        VARIABLE_NAME_HEADER aquarium
+    )
+
     set(shaders_header_contents
 "#pragma once
 

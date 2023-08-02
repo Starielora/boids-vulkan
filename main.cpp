@@ -26,6 +26,7 @@
 #include <cmath>
 #include <stack>
 #include <span>
+#include <random>
 
 // TODO error message
 #define VK_CHECK(f) do { const auto result = f; if(result != VK_SUCCESS) {spdlog::error("{}: {}", #f, result); throw std::runtime_error("");}} while(0)
@@ -124,6 +125,7 @@ namespace window
         spdlog::trace("Create glfw window.");
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
         glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
+        glfwWindowHint(GLFW_MAXIMIZED, GL_TRUE);
 
         const auto window = glfwCreateWindow(800, 600, "boids", nullptr, nullptr);
         assert(window);
@@ -703,14 +705,20 @@ auto create_render_pass(VkDevice logical_device, VkFormat swapchain_format, VkFo
 
 auto create_pipeline_layout(VkDevice logical_device, const std::vector<VkDescriptorSetLayout>& set_layouts, decltype(cleanup::general_queue)& cleanup_queue)
 {
+    const auto push_constant_range = VkPushConstantRange{
+        .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
+        .offset = 0,
+        .size = sizeof(float)
+    };
+
     const auto pipeline_layout_create_info = VkPipelineLayoutCreateInfo{
         .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
         .pNext = nullptr,
         .flags = 0,
         .setLayoutCount = static_cast<uint32_t>(set_layouts.size()),
         .pSetLayouts = set_layouts.data(),
-        .pushConstantRangeCount = 0,
-        .pPushConstantRanges = nullptr
+        .pushConstantRangeCount = 1,
+        .pPushConstantRanges = &push_constant_range
     };
 
     auto pipeline_layout = VkPipelineLayout{};
@@ -1239,12 +1247,8 @@ auto pad_uniform_buffer_size(std::size_t original_size, std::size_t min_uniform_
 
 namespace gui
 {
-    auto model_pos = glm::vec3(0., 0., 0.);
-    auto model_rot = glm::vec3(0., 0., 0.);
-    auto model_scale = glm::vec3(1., 1., 1.);
-    auto model_dir = glm::vec3(0., 1.f, 0.f);
-    auto model_right = glm::vec3(1., 0., 0.);
-    auto model_up = glm::vec3(0.f, 0.f, 1.f);
+    auto model_scale = glm::vec3(0.5, 0.5, 0.5);
+    auto model_speed = 0.01f;
 
     auto create_descriptor_pool(VkDevice logical_device, decltype(cleanup::general_queue)& cleanup_queue)
     {
@@ -1347,7 +1351,6 @@ namespace gui
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
 
-        ImGui::DragFloat3("dir", &model_dir[0], 0.01f, -1.f, 1.f);
         ImGui::Text("Camera");
         static constexpr auto vec3_format = FMT_COMPILE("({: .2f}, {: .2f}, {: .2f})");
         static constexpr auto vec4_format = FMT_COMPILE("({: .2f}, {: .2f}, {: .2f}, {: .2f})");
@@ -1360,6 +1363,7 @@ namespace gui
         ImGui::Text(fmt::format(aligned_vectors_format, "up:", up_str).c_str());
         ImGui::Text(fmt::format(aligned_vectors_format, "front:", front_str).c_str());
         ImGui::Text(fmt::format(aligned_vectors_format, "right:", right_str).c_str());
+        ImGui::DragFloat("Speed", &model_speed, 0.001, -1.f, 1.f);
 
         if (ImGui::CollapsingHeader(fmt::format("Instances [{}]", cones.size()).c_str()))
         {
@@ -1475,7 +1479,7 @@ namespace cone
         .flags = 0,
         .depthClampEnable = VK_FALSE,
         .rasterizerDiscardEnable = VK_FALSE,
-        .polygonMode = VK_POLYGON_MODE_LINE,
+        .polygonMode = VK_POLYGON_MODE_FILL,
         .cullMode = VK_CULL_MODE_BACK_BIT,
         .frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE,
         .depthBiasEnable = VK_FALSE,
@@ -1635,6 +1639,22 @@ namespace cone
         };
 
         return create_info;
+    }
+
+    auto generate_model_data(std::span<cone_instance>& cones, glm::vec3 min_range, glm::vec3 max_range)
+    {
+        auto rd = std::random_device{};
+        auto gen = std::mt19937(rd());
+        auto dis = std::uniform_real_distribution<>(-1., 1.);
+        auto x_dis = std::uniform_real_distribution<>(min_range.x, max_range.x);
+        auto y_dis = std::uniform_real_distribution<>(min_range.y, max_range.y);
+        auto z_dis = std::uniform_real_distribution<>(min_range.z, max_range.z);
+
+        for (auto& cone : cones)
+        {
+            cone.position = glm::vec4(x_dis(gen), y_dis(gen), z_dis(gen), 0.);
+            cone.direction = glm::normalize(glm::vec4(dis(gen), dis(gen), dis(gen), 0.));
+        }
     }
 }
 
@@ -1809,18 +1829,222 @@ namespace grid
     }
 }
 
+namespace aquarium
+{
+    constexpr float scale = 15.f;
+    const auto min_range = glm::vec3(-scale, 0.f, -scale);
+    const auto max_range = glm::vec3(scale, scale, scale);
+
+    struct
+    {
+        glm::vec3 front = glm::vec3(0, 0, -1);
+        glm::vec3 back = glm::vec3(0, 0, 1);
+        glm::vec3 top = glm::vec3(0, -1, 0);
+        glm::vec3 bottom = glm::vec3(0, 1, 0);
+        glm::vec3 left = glm::vec3(1, 0, 0);
+        glm::vec3 right = glm::vec3(-1, 0, 0);
+    } const inward_faces_normals;
+
+    std::tuple<bool, const glm::vec3&> check_collision(const glm::vec3& pos)
+    {
+        if (pos.x < min_range.x)
+            return { true, inward_faces_normals.left };
+        else if (pos.x > max_range.x)
+            return { true, inward_faces_normals.right };
+        else if (pos.y < min_range.y)
+            return { true, inward_faces_normals.bottom };
+        else if (pos.y > max_range.y)
+            return { true, inward_faces_normals.top };
+        else if (pos.z < min_range.z)
+            return { true, inward_faces_normals.back };
+        else if (pos.z > max_range.z)
+            return { true, inward_faces_normals.front };
+
+        return { false, {} };
+    }
+
+    constexpr auto vertex_input_state = VkPipelineVertexInputStateCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .vertexBindingDescriptionCount = 0,
+        .pVertexBindingDescriptions = nullptr,
+        .vertexAttributeDescriptionCount = 0,
+        .pVertexAttributeDescriptions = nullptr
+    };
+
+    constexpr auto input_assembly_state = VkPipelineInputAssemblyStateCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+        .primitiveRestartEnable = VK_FALSE
+    };
+
+    auto viewport = VkViewport{
+        .x = 0.f,
+        .y = 0.f,
+        .width = 0.f,
+        .height = 0.f,
+        .minDepth = 0.f,
+        .maxDepth = 1.f
+    };
+
+    auto scissors = VkRect2D{
+        .offset = VkOffset2D{
+            .x = 0,
+            .y = 0,
+        },
+        .extent = {}
+    };
+
+    const auto viewport_state = VkPipelineViewportStateCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .viewportCount = 1,
+        .pViewports = &viewport,
+        .scissorCount = 1,
+        .pScissors = &scissors,
+    };
+
+    constexpr auto rasterization_state = VkPipelineRasterizationStateCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .depthClampEnable = VK_FALSE,
+        .rasterizerDiscardEnable = VK_FALSE,
+        .polygonMode = VK_POLYGON_MODE_LINE,
+        .cullMode = VK_CULL_MODE_NONE,
+        .frontFace = VK_FRONT_FACE_CLOCKWISE,
+        .depthBiasEnable = VK_FALSE,
+        .depthBiasConstantFactor = 0.f,
+        .depthBiasClamp = 0.f,
+        .depthBiasSlopeFactor = 0.f,
+        .lineWidth = 10.f
+    };
+
+    constexpr auto multisample_state = VkPipelineMultisampleStateCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .rasterizationSamples = msaa_samples,
+        .sampleShadingEnable = VK_FALSE,
+        .minSampleShading = 1.f,
+        .pSampleMask = nullptr,
+        .alphaToCoverageEnable = VK_FALSE,
+        .alphaToOneEnable = VK_FALSE
+    };
+
+    constexpr auto depth_stencil_state = VkPipelineDepthStencilStateCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .depthTestEnable = VK_TRUE,
+        .depthWriteEnable = VK_TRUE,
+        .depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL,
+        .depthBoundsTestEnable = VK_FALSE,
+        .stencilTestEnable = VK_FALSE,
+        .front = {},
+        .back = {},
+        .minDepthBounds = 0.f,
+        .maxDepthBounds = 1.f
+    };
+
+    constexpr auto color_blend_attachment_state = VkPipelineColorBlendAttachmentState{
+        .blendEnable = VK_TRUE,
+        .srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA,
+        .dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+        .colorBlendOp = VK_BLEND_OP_ADD,
+        .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
+        .dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO,
+        .alphaBlendOp = VK_BLEND_OP_ADD,
+        .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT
+    };
+
+    const auto color_blend_state = VkPipelineColorBlendStateCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .logicOpEnable = VK_FALSE,
+        .logicOp = VK_LOGIC_OP_COPY,
+        .attachmentCount = 1,
+        .pAttachments = &color_blend_attachment_state,
+        .blendConstants = {0.f, 0.f, 0.f, 0.f}
+    };
+
+    auto shader_stages = std::array{
+        VkPipelineShaderStageCreateInfo{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .stage = VK_SHADER_STAGE_VERTEX_BIT,
+            .module = 0,
+            .pName = shader_entry_point.data(),
+            .pSpecializationInfo = nullptr
+        },
+        VkPipelineShaderStageCreateInfo{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
+            .module = 0,
+            .pName = shader_entry_point.data(),
+            .pSpecializationInfo = nullptr
+        }
+    };
+
+    auto get_pipeline_create_info(VkDevice logical_device, const std::vector<VkShaderModule>& shaders, VkPipelineLayout pipeline_layout, VkRenderPass render_pass, const VkExtent2D& window_extent)
+    {
+        assert(shaders.size() == shader_stages.size());
+        for (std::size_t i = 0; i < shaders.size(); ++i)
+            shader_stages[i].module = shaders[i];
+
+        viewport.width = window_extent.width;
+        viewport.height = window_extent.height;
+
+        scissors.extent = window_extent;
+
+        const auto create_info = VkGraphicsPipelineCreateInfo{
+            .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .stageCount = static_cast<uint32_t>(shader_stages.size()),
+            .pStages = shader_stages.data(),
+            .pVertexInputState = &vertex_input_state,
+            .pInputAssemblyState = &input_assembly_state,
+            .pTessellationState = nullptr,
+            .pViewportState = &viewport_state,
+            .pRasterizationState = &rasterization_state,
+            .pMultisampleState = &multisample_state,
+            .pDepthStencilState = &depth_stencil_state,
+            .pColorBlendState = &color_blend_state,
+            .pDynamicState = nullptr,
+            .layout = pipeline_layout,
+            .renderPass = render_pass,
+            .subpass = 0,
+            .basePipelineHandle = VK_NULL_HANDLE,
+            .basePipelineIndex = 0
+        };
+
+        return create_info;
+    }
+}
+
 auto recreate_graphics_pipeline_and_swapchain(GLFWwindow* window, VkDevice logical_device, VkPhysicalDevice physical_device, const std::vector<std::vector<VkShaderModule>>& shader_modules, VkPipelineLayout pipeline_layout, VkRenderPass render_pass, VkSurfaceKHR surface, uint32_t queue_family_index, VkFormat swapchain_format, decltype(cleanup::general_queue)& cleanup_queue)
 {
     const auto window_extent = window::get_extent(window);
     spdlog::info("New extent: {}, {}", window_extent.width, window_extent.height);
 
-    assert(shader_modules.size() == 2);
+    assert(shader_modules.size() == 3);
     const auto& cone_shaders = shader_modules[0];
     const auto& grid_shaders = shader_modules[1];
+    const auto& aquarium_shaders = shader_modules[2];
 
     auto graphics_pipelines = create_graphics_pipelines(logical_device, {
         cone::get_pipeline_create_info(logical_device, cone_shaders, pipeline_layout, render_pass, window_extent),
         grid::get_pipeline_create_info(logical_device, grid_shaders, pipeline_layout, render_pass, window_extent),
+        aquarium::get_pipeline_create_info(logical_device, aquarium_shaders, pipeline_layout, render_pass, window_extent),
     }, cleanup_queue);
     const auto [swapchain, surface_format] = create_swapchain(logical_device, physical_device, surface, queue_family_index, window_extent, cleanup_queue);
     const auto [swapchain_images, swapchain_image_views] = get_swapchain_images(logical_device, swapchain, surface_format.format, cleanup_queue);
@@ -1876,14 +2100,17 @@ int main()
     const auto pipeline_layout = create_pipeline_layout(logical_device, { descriptor_set_layout }, cleanup::general_queue);
     const auto cone_shaders = load_shaders(logical_device, { shader_path::vertex::triangle, shader_path::fragment::triangle }, cleanup::general_queue);
     const auto grid_shaders = load_shaders(logical_device, { shader_path::vertex::grid, shader_path::fragment::grid }, cleanup::general_queue);
+    const auto aquarium_shaders = load_shaders(logical_device, { shader_path::vertex::aquarium, shader_path::fragment::aquarium }, cleanup::general_queue);
 
     auto graphics_pipelines = create_graphics_pipelines(logical_device, {
         cone::get_pipeline_create_info(logical_device, cone_shaders, pipeline_layout, render_pass, window_extent),
         grid::get_pipeline_create_info(logical_device, grid_shaders, pipeline_layout, render_pass, window_extent),
+        aquarium::get_pipeline_create_info(logical_device, aquarium_shaders, pipeline_layout, render_pass, window_extent),
     }, cleanup::swapchain_queue);
 
     auto& cone_pipeline = graphics_pipelines[0];
     auto& grid_pipeline = graphics_pipelines[1];
+    auto& aquarium_pipeline = graphics_pipelines[2];
 
     constexpr auto overlapping_frames_count = 2;
 
@@ -1901,6 +2128,7 @@ int main()
     cone_instance model_data[instances_count];
 
     auto model_data_span = std::span(model_data, model_data + instances_count);
+    cone::generate_model_data(model_data_span, aquarium::min_range, aquarium::max_range);
 
     const auto camera_data_padded_size = pad_uniform_buffer_size(sizeof(camera_data), physical_device_properties.limits.minUniformBufferOffsetAlignment);
     const auto [camera_data_buffer, camera_data_memory] = create_buffer(logical_device, physical_device, overlapping_frames_count * camera_data_padded_size, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, cleanup::general_queue);
@@ -1963,9 +2191,10 @@ int main()
                 spdlog::info("Destroy swapchain objects.");
                 cleanup::flush(cleanup::swapchain_queue);
 
-                std::tie(graphics_pipelines, window_extent, swapchain, surface_format, swapchain_images, swapchain_image_views, swapchain_framebuffers, color_image, color_image_memory, color_image_view, depth_image, depth_image_view, depth_image_memory) = recreate_graphics_pipeline_and_swapchain(window, logical_device, physical_device, { cone_shaders, grid_shaders }, pipeline_layout, render_pass, surface, queue_family_index, surface_format.format, cleanup::swapchain_queue);
+                std::tie(graphics_pipelines, window_extent, swapchain, surface_format, swapchain_images, swapchain_image_views, swapchain_framebuffers, color_image, color_image_memory, color_image_view, depth_image, depth_image_view, depth_image_memory) = recreate_graphics_pipeline_and_swapchain(window, logical_device, physical_device, { cone_shaders, grid_shaders, aquarium_shaders }, pipeline_layout, render_pass, surface, queue_family_index, surface_format.format, cleanup::swapchain_queue);
                 cone_pipeline = graphics_pipelines[0];
                 grid_pipeline = graphics_pipelines[1];
+                aquarium_pipeline = graphics_pipelines[2];
                 continue;
             }
             else if (result != VK_SUCCESS)
@@ -2007,10 +2236,19 @@ int main()
         for (std::size_t i = 0; i < instances_count; ++i)
         {
             auto& model = model_data[i];
-            model.position = glm::vec4(gui::model_pos + glm::vec3((int(i) % 10 - 5), 0, (int(i) / 10) - 5), 0.);
-            model.direction = glm::vec4(gui::model_dir, 0.);
+            const auto pos_update = glm::vec4(gui::model_speed, gui::model_speed, gui::model_speed, 0.) * model.direction;
+            const auto& [collision, normal] = aquarium::check_collision(model.position + pos_update);
+            if (collision)
+            {
+                model.direction = glm::vec4(glm::reflect(glm::vec3(model.direction), normal), 0.);
+            }
+            else
+            {
+                model.position += pos_update;
+            }
+
             model.model_matrix = glm::translate(glm::mat4(1.), glm::vec3(model.position));
-            model.model_matrix = model.model_matrix * glm::toMat4(glm::rotation({0, 1, 0}, glm::normalize(gui::model_dir)));
+            model.model_matrix = model.model_matrix * glm::toMat4(glm::rotation({0, 1, 0}, glm::normalize(glm::vec3(model.direction))));
             model.model_matrix = glm::scale(model.model_matrix, gui::model_scale * glm::vec3(0.5));
         }
         std::memcpy(reinterpret_cast<char*>(model_data_memory_ptr) + current_frame * model_data_padded_size, &model_data, sizeof(model_data));
@@ -2036,6 +2274,7 @@ int main()
 
         vkCmdBeginRenderPass(command_buffer, &render_pass_begin_info, VK_SUBPASS_CONTENTS_INLINE);
 
+        vkCmdPushConstants(command_buffer, pipeline_layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(float), &aquarium::scale);
         vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout, 0, 1, &descriptor_sets[current_frame], 0, nullptr);
         vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, cone_pipeline);
         const auto offsets = std::array{ VkDeviceSize{ 0 } };
@@ -2043,7 +2282,9 @@ int main()
         vkCmdBindIndexBuffer(command_buffer, vertex_buffer, cone_vertex_buffer_size, VK_INDEX_TYPE_UINT16);
         vkCmdDrawIndexed(command_buffer, cone_index_buffer.size(), instances_count, 0, 0, 0);
 
-        vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout, 0, 1, &descriptor_sets[current_frame], 0, nullptr);
+        vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, aquarium_pipeline);
+        vkCmdDraw(command_buffer, 36, 1, 0, 0);
+
         vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, grid_pipeline);
         vkCmdDraw(command_buffer, 6, 1, 0, 0);
 
