@@ -11,6 +11,7 @@
 #include <glm/gtx/quaternion.hpp>
 
 #include <spdlog/spdlog.h>
+#include <spdlog/fmt/compile.h>
 #include <shaders/shaders.h>
 
 #include <cassert>
@@ -57,6 +58,14 @@ struct vertex
 {
     glm::vec3 pos;
     glm::vec3 color;
+};
+
+struct cone_instance
+{
+    glm::vec4 position = glm::vec4(0, 0, 0, 0);
+    glm::vec4 direction = glm::vec4(0, 0, 0, 0);
+    glm::vec4 color = glm::vec4(0, 0, 0, 1);
+    glm::mat4 model_matrix = glm::mat4(1.);
 };
 
 auto read_file(const std::string_view filename)
@@ -1332,7 +1341,7 @@ namespace gui
         });
     }
 
-    void draw(VkCommandBuffer command_buffer)
+    void draw(VkCommandBuffer command_buffer, std::span<cone_instance>& cones)
     {
         ImGui_ImplVulkan_NewFrame();
         ImGui_ImplGlfw_NewFrame();
@@ -1340,14 +1349,37 @@ namespace gui
 
         ImGui::DragFloat3("dir", &model_dir[0], 0.01f, -1.f, 1.f);
         ImGui::Text("Camera");
-        const auto pos_str = fmt::format("({: .2f}, {: .2f}, {: .2f})", g_camera.position().x, g_camera.position().y, g_camera.position().z);
-        const auto up_str = fmt::format("({: .2f}, {: .2f}, {: .2f})", g_camera.up().x, g_camera.up().y, g_camera.up().z);
-        const auto front_str = fmt::format("({: .2f}, {: .2f}, {: .2f})", g_camera.front().x, g_camera.front().y, g_camera.front().z);
-        const auto right_str = fmt::format("({: .2f}, {: .2f}, {: .2f})", g_camera.right().x, g_camera.right().y, g_camera.right().z);
-        ImGui::Text(fmt::format("{: <10} {:>}", "pos:", pos_str).c_str());
-        ImGui::Text(fmt::format("{: <10} {:>}", "up:", up_str).c_str());
-        ImGui::Text(fmt::format("{: <10} {:>}", "front:", front_str).c_str());
-        ImGui::Text(fmt::format("{: <10} {:>}", "right:", right_str).c_str());
+        static constexpr auto vec3_format = FMT_COMPILE("({: .2f}, {: .2f}, {: .2f})");
+        static constexpr auto vec4_format = FMT_COMPILE("({: .2f}, {: .2f}, {: .2f}, {: .2f})");
+        static constexpr auto aligned_vectors_format = FMT_COMPILE("{: <10} {:>}");
+        const auto pos_str = fmt::format(vec3_format, g_camera.position().x, g_camera.position().y, g_camera.position().z);
+        const auto up_str = fmt::format(vec3_format, g_camera.up().x, g_camera.up().y, g_camera.up().z);
+        const auto front_str = fmt::format(vec3_format, g_camera.front().x, g_camera.front().y, g_camera.front().z);
+        const auto right_str = fmt::format(vec3_format, g_camera.right().x, g_camera.right().y, g_camera.right().z);
+        ImGui::Text(fmt::format(aligned_vectors_format, "pos:", pos_str).c_str());
+        ImGui::Text(fmt::format(aligned_vectors_format, "up:", up_str).c_str());
+        ImGui::Text(fmt::format(aligned_vectors_format, "front:", front_str).c_str());
+        ImGui::Text(fmt::format(aligned_vectors_format, "right:", right_str).c_str());
+
+        if (ImGui::CollapsingHeader(fmt::format("Instances [{}]", cones.size()).c_str()))
+        {
+            for (std::size_t i = 0; i < cones.size(); ++i)
+            {
+                if (ImGui::TreeNode(fmt::format("Instance {}", i).c_str()))
+                {
+                    auto& cone = cones[i];
+                    const auto pos_str = fmt::format(vec3_format, cone.position.x, cone.position.y, cone.position.z);
+                    const auto dir_str = fmt::format(vec3_format, cone.direction.x, cone.direction.y, cone.direction.z);
+                    const auto color_str = fmt::format(vec4_format, cone.color.x, cone.color.y, cone.color.z, cone.color.w);
+                    ImGui::Text(fmt::format(aligned_vectors_format, "pos:", pos_str).c_str());
+                    ImGui::Text(fmt::format(aligned_vectors_format, "dir:", dir_str).c_str());
+                    ImGui::Text(fmt::format(aligned_vectors_format, "color:", color_str).c_str());
+                    ImGui::SameLine();
+                    ImGui::ColorEdit4("", &cone.color[0], ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_PickerHueWheel);
+                    ImGui::TreePop();
+                }
+            }
+        }
 
         //ImGui::ShowDemoWindow();
 
@@ -1371,7 +1403,6 @@ auto load_shaders(VkDevice logical_device, std::initializer_list<std::string_vie
 
 namespace cone
 {
-    // TODO potentially vertex input could be refleted from shaders
     constexpr auto bindingDescription = VkVertexInputBindingDescription{
         .binding = 0,
         .stride = 2 * sizeof(glm::vec3),
@@ -1867,10 +1898,9 @@ int main()
     } camera_data;
 
     constexpr auto instances_count = 100;
-    struct
-    {
-        glm::mat4 model_matrix = glm::mat4(1.);
-    } model_data[instances_count];
+    cone_instance model_data[instances_count];
+
+    auto model_data_span = std::span(model_data, model_data + instances_count);
 
     const auto camera_data_padded_size = pad_uniform_buffer_size(sizeof(camera_data), physical_device_properties.limits.minUniformBufferOffsetAlignment);
     const auto [camera_data_buffer, camera_data_memory] = create_buffer(logical_device, physical_device, overlapping_frames_count * camera_data_padded_size, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, cleanup::general_queue);
@@ -1977,7 +2007,9 @@ int main()
         for (std::size_t i = 0; i < instances_count; ++i)
         {
             auto& model = model_data[i];
-            model.model_matrix = glm::translate(glm::mat4(1.), gui::model_pos + glm::vec3((int(i)%10 - 5), 0, (int(i) / 10) - 5));
+            model.position = glm::vec4(gui::model_pos + glm::vec3((int(i) % 10 - 5), 0, (int(i) / 10) - 5), 0.);
+            model.direction = glm::vec4(gui::model_dir, 0.);
+            model.model_matrix = glm::translate(glm::mat4(1.), glm::vec3(model.position));
             model.model_matrix = model.model_matrix * glm::toMat4(glm::rotation({0, 1, 0}, glm::normalize(gui::model_dir)));
             model.model_matrix = glm::scale(model.model_matrix, gui::model_scale * glm::vec3(0.5));
         }
@@ -2015,7 +2047,7 @@ int main()
         vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, grid_pipeline);
         vkCmdDraw(command_buffer, 6, 1, 0, 0);
 
-        gui::draw(command_buffer);
+        gui::draw(command_buffer, model_data_span);
 
         vkCmdEndRenderPass(command_buffer);
         VK_CHECK(vkEndCommandBuffer(command_buffer));

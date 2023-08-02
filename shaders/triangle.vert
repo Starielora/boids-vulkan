@@ -3,7 +3,7 @@
 layout(location = 0) in vec3 pos;
 layout(location = 1) in vec3 color;
 
-layout(location = 0) out vec3 fragColor;
+layout(location = 0) out vec4 frag_color;
 
 layout(set = 0, binding = 0) uniform CameraData
 {
@@ -11,11 +11,20 @@ layout(set = 0, binding = 0) uniform CameraData
     mat4 projview;
 } camera_data;
 
-layout(set = 0, binding = 1) readonly buffer ModelData{
-    mat4 matrix[];
+struct ConeInstance
+{
+    vec4 position;
+    vec4 direction;
+    vec4 color;
+    mat4 model_matrix;
+};
+
+layout(set = 0, binding = 1) readonly buffer ModelData
+{
+    ConeInstance cones[];
 } model;
 
 void main() {
-    gl_Position = camera_data.projview * model.matrix[gl_InstanceIndex] * vec4(pos, 1.0);
-    fragColor = color;
+    gl_Position = camera_data.projview * model.cones[gl_InstanceIndex].model_matrix * vec4(pos, 1.0);
+    frag_color = model.cones[gl_InstanceIndex].color;
 }
