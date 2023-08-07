@@ -25,7 +25,7 @@ public:
 	auto& fov() { return _fov; }
 	auto& right() { return _camera_right; }
 
-	auto projection(float width, float height) { return glm::perspective(glm::radians(_fov), width / height, 0.1f, 100.f); }
+	auto projection(float width, float height) { return glm::perspective(glm::radians(_fov), width / height, 0.1f, 200.f); }
 	auto view() {
 		return glm::lookAtLH(_camera_pos + _camera_dir, _camera_pos, _camera_up);
 	}

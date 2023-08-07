@@ -15,6 +15,7 @@ struct ConeInstance
 {
     vec4 position;
     vec4 direction;
+    vec4 velocity;
     vec4 color;
     mat4 model_matrix;
 };

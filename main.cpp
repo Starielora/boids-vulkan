@@ -65,6 +65,7 @@ struct cone_instance
 {
     glm::vec4 position = glm::vec4(0, 0, 0, 0);
     glm::vec4 direction = glm::vec4(0, 0, 0, 0);
+    glm::vec4 velocity = glm::vec4(0, 0, 0, 0);
     glm::vec4 color = glm::vec4(0, 0, 0, 1);
     glm::mat4 model_matrix = glm::mat4(1.);
 };
@@ -1245,10 +1246,55 @@ auto pad_uniform_buffer_size(std::size_t original_size, std::size_t min_uniform_
     return aligned_size;
 }
 
+namespace boids
+{
+    auto visual_range = 1.f;
+    auto cohesion_weight = 0.001f;
+    auto separation_weight = 0.001f;
+    auto alignment_weight = 0.001f;
+
+    auto steer(std::size_t index, const std::vector<cone_instance>& boids)
+    {
+        assert(index < boids.size());
+        const auto& current_boid = boids[index];
+
+        auto observed_boids = std::size_t{ 0 };
+        auto avg_observable_cluster_position = glm::vec4(0);
+        auto separation = glm::vec4(0);
+        auto alignment = glm::vec4();
+        for (std::size_t i = 0; i < boids.size(); ++i)
+        {
+            const auto& boid = boids[i];
+            const auto distance = glm::distance(current_boid.position, boid.position);
+            if (i != index && distance < visual_range) // TODO use distance2 to avoid paying for sqrt
+            {
+                observed_boids++;
+                avg_observable_cluster_position += boid.position;
+                separation += (current_boid.position - boid.position) / glm::abs(distance);
+                alignment += boid.velocity;
+            }
+        }
+
+        if (observed_boids)
+        {
+            avg_observable_cluster_position /= observed_boids;
+            alignment /= observed_boids;
+            const auto total_cohesion = (avg_observable_cluster_position - current_boid.position) * cohesion_weight;
+            const auto total_separation = separation * separation_weight;
+            const auto total_alignment = alignment * alignment_weight;
+            return total_cohesion + total_separation + total_alignment;
+        }
+        else
+        {
+            return glm::vec4(0);
+        }
+    }
+}
+
 namespace gui
 {
     auto model_scale = glm::vec3(0.5, 0.5, 0.5);
-    auto model_speed = 0.01f;
+    auto model_speed = 0.1f;
 
     auto create_descriptor_pool(VkDevice logical_device, decltype(cleanup::general_queue)& cleanup_queue)
     {
@@ -1364,6 +1410,16 @@ namespace gui
         ImGui::Text(fmt::format(aligned_vectors_format, "front:", front_str).c_str());
         ImGui::Text(fmt::format(aligned_vectors_format, "right:", right_str).c_str());
         ImGui::DragFloat("Speed", &model_speed, 0.001, -1.f, 1.f);
+
+        ImGui::Text("Boids params");
+        ImGui::Separator();
+        ImGui::DragFloat("Cohesion", &boids::cohesion_weight, 0.001, 0.f, 1.f);
+        ImGui::Separator();
+        ImGui::DragFloat("Separation", &boids::separation_weight, 0.001f, 0.f, 1.f);
+        ImGui::Separator();
+        ImGui::DragFloat("Alignment", &boids::alignment_weight, 0.001f, 0.f, 1.f);
+        ImGui::Separator();
+        ImGui::DragFloat("Visual range", &boids::visual_range, 0.1f, 0.f, 30.f);
 
         if (ImGui::CollapsingHeader(fmt::format("Instances [{}]", cones.size()).c_str()))
         {
@@ -1831,7 +1887,7 @@ namespace grid
 
 namespace aquarium
 {
-    constexpr float scale = 15.f;
+    constexpr float scale = 30.f;
     const auto min_range = glm::vec3(-scale, 0.f, -scale);
     const auto max_range = glm::vec3(scale, scale, scale);
 
@@ -1845,7 +1901,7 @@ namespace aquarium
         glm::vec3 right = glm::vec3(-1, 0, 0);
     } const inward_faces_normals;
 
-    std::tuple<bool, const glm::vec3&> check_collision(const glm::vec3& pos)
+    std::tuple<bool, const glm::vec3&> check_collision(const glm::vec4& pos)
     {
         if (pos.x < min_range.x)
             return { true, inward_faces_normals.left };
@@ -2126,6 +2182,7 @@ int main()
 
     constexpr auto instances_count = 100;
     cone_instance model_data[instances_count];
+    auto model_data_update_buffer = std::vector<cone_instance>(instances_count);
 
     auto model_data_span = std::span(model_data, model_data + instances_count);
     cone::generate_model_data(model_data_span, aquarium::min_range, aquarium::max_range);
@@ -2232,19 +2289,23 @@ int main()
         camera_data.position = glm::vec4(g_camera.position(), 0.f);
         camera_data.viewproj = flip_clip_space * g_camera.projection(window_extent.width, window_extent.height) * g_camera.view();
         std::memcpy(reinterpret_cast<char*>(camera_data_memory_ptr) + current_frame * camera_data_padded_size, &camera_data, sizeof(camera_data));
+        model_data_update_buffer = std::vector(model_data_span.begin(), model_data_span.end());
         // TODO flush buffer before descriptor set update?
         for (std::size_t i = 0; i < instances_count; ++i)
         {
             auto& model = model_data[i];
-            const auto pos_update = glm::vec4(gui::model_speed, gui::model_speed, gui::model_speed, 0.) * model.direction;
-            const auto& [collision, normal] = aquarium::check_collision(model.position + pos_update);
+            model.velocity = model.direction;
+            model.velocity += boids::steer(i, model_data_update_buffer);
+            model.velocity *= gui::model_speed;
+            model.direction = glm::normalize(model.velocity);
+            const auto& [collision, normal] = aquarium::check_collision(model.position + model.velocity);
             if (collision)
             {
                 model.direction = glm::vec4(glm::reflect(glm::vec3(model.direction), normal), 0.);
             }
             else
             {
-                model.position += pos_update;
+                model.position += model.velocity;
             }
 
             model.model_matrix = glm::translate(glm::mat4(1.), glm::vec3(model.position));
