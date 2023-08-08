@@ -1295,6 +1295,7 @@ namespace gui
 {
     auto model_scale = glm::vec3(0.5, 0.5, 0.5);
     auto model_speed = 0.1f;
+    auto wall_force_weight = 0.1f;
 
     auto create_descriptor_pool(VkDevice logical_device, decltype(cleanup::general_queue)& cleanup_queue)
     {
@@ -1420,6 +1421,8 @@ namespace gui
         ImGui::DragFloat("Alignment", &boids::alignment_weight, 0.001f, 0.f, 1.f);
         ImGui::Separator();
         ImGui::DragFloat("Visual range", &boids::visual_range, 0.1f, 0.f, 30.f);
+        ImGui::Separator();
+        ImGui::DragFloat("Wall force", &wall_force_weight, 0.01f, 0.f, 1.f);
 
         if (ImGui::CollapsingHeader(fmt::format("Instances [{}]", cones.size()).c_str()))
         {
@@ -1431,8 +1434,10 @@ namespace gui
                     const auto pos_str = fmt::format(vec3_format, cone.position.x, cone.position.y, cone.position.z);
                     const auto dir_str = fmt::format(vec3_format, cone.direction.x, cone.direction.y, cone.direction.z);
                     const auto color_str = fmt::format(vec4_format, cone.color.x, cone.color.y, cone.color.z, cone.color.w);
+                    const auto velocity_str = fmt::format(vec3_format, cone.velocity.x, cone.velocity.y, cone.velocity.z);
                     ImGui::Text(fmt::format(aligned_vectors_format, "pos:", pos_str).c_str());
                     ImGui::Text(fmt::format(aligned_vectors_format, "dir:", dir_str).c_str());
+                    ImGui::Text(fmt::format(aligned_vectors_format, "velocity:", velocity_str).c_str());
                     ImGui::Text(fmt::format(aligned_vectors_format, "color:", color_str).c_str());
                     ImGui::SameLine();
                     ImGui::ColorEdit4("", &cone.color[0], ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_PickerHueWheel);
@@ -1710,6 +1715,7 @@ namespace cone
         {
             cone.position = glm::vec4(x_dis(gen), y_dis(gen), z_dis(gen), 0.);
             cone.direction = glm::normalize(glm::vec4(dis(gen), dis(gen), dis(gen), 0.));
+            cone.velocity = cone.direction;
         }
     }
 }
@@ -1890,6 +1896,7 @@ namespace aquarium
     constexpr float scale = 30.f;
     const auto min_range = glm::vec3(-scale, 0.f, -scale);
     const auto max_range = glm::vec3(scale, scale, scale);
+    auto force_weight = 0.1;
 
     struct
     {
@@ -1917,6 +1924,27 @@ namespace aquarium
             return { true, inward_faces_normals.front };
 
         return { false, {} };
+    }
+
+    auto steer_away_from_walls(const cone_instance& boid)
+    {
+        const auto front_distance = glm::distance2(glm::vec3(boid.position), glm::vec3(boid.position.x, boid.position.y, max_range.z));
+        const auto back_distance = glm::distance2(glm::vec3(boid.position), glm::vec3(boid.position.x, boid.position.y, min_range.z));
+        const auto top_distance = glm::distance2(glm::vec3(boid.position), glm::vec3(boid.position.x, max_range.y, boid.position.z));
+        const auto bottom_distance = glm::distance2(glm::vec3(boid.position), glm::vec3(boid.position.x, min_range.y, boid.position.z));
+        const auto left_distance = glm::distance2(glm::vec3(boid.position), glm::vec3(min_range.x, boid.position.y, boid.position.z));
+        const auto right_distance = glm::distance2(glm::vec3(boid.position), glm::vec3(max_range.x, boid.position.y, boid.position.z));
+
+        auto velocity_diff = glm::vec3(0);
+
+        velocity_diff += inward_faces_normals.front / front_distance;
+        velocity_diff += inward_faces_normals.back / back_distance;
+        velocity_diff += inward_faces_normals.top / top_distance;
+        velocity_diff += inward_faces_normals.bottom / bottom_distance;
+        velocity_diff += inward_faces_normals.left / left_distance;
+        velocity_diff += inward_faces_normals.right / right_distance;
+
+        return velocity_diff * gui::wall_force_weight;
     }
 
     constexpr auto vertex_input_state = VkPipelineVertexInputStateCreateInfo{
@@ -2294,10 +2322,13 @@ int main()
         for (std::size_t i = 0; i < instances_count; ++i)
         {
             auto& model = model_data[i];
+            const auto velocity_update1 = boids::steer(i, model_data_update_buffer);
+            const auto velocity_update2 = glm::vec4(aquarium::steer_away_from_walls(model), 0);
             model.velocity = model.direction;
-            model.velocity += boids::steer(i, model_data_update_buffer);
+            model.velocity += velocity_update1 + velocity_update2;
             model.velocity *= gui::model_speed;
-            model.direction = glm::normalize(model.velocity);
+            if (glm::length(model.velocity))
+                model.direction = glm::normalize(model.velocity);
             const auto& [collision, normal] = aquarium::check_collision(model.position + model.velocity);
             if (collision)
             {
