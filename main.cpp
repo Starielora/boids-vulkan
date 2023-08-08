@@ -1252,6 +1252,7 @@ namespace boids
     auto cohesion_weight = 0.001f;
     auto separation_weight = 0.001f;
     auto alignment_weight = 0.001f;
+    auto wall_force_weight = 0.1f;
 
     auto steer(std::size_t index, const std::vector<cone_instance>& boids)
     {
@@ -1289,13 +1290,39 @@ namespace boids
             return glm::vec4(0);
         }
     }
+
+    class repellent
+    {
+    public:
+        virtual glm::vec3 get_velocity_diff(const cone_instance&) const = 0;
+    };
+
+    class plane_repellent final : public repellent
+    {
+    public:
+        plane_repellent(glm::vec3 normal, float pos) : _normal(std::move(normal)), _pos(pos)
+        {
+        }
+
+        virtual glm::vec3 get_velocity_diff(const cone_instance& boid) const override
+        {
+            const auto boid_position = glm::vec3(boid.position);
+            const auto v = boid_position - _normal * boid_position + _pos * _normal; // project boid onto plane
+            const auto distance2 = glm::distance2(boid_position, v);
+
+            return (_normal / distance2) * wall_force_weight;
+        }
+
+    private:
+        glm::vec3 _normal;
+        float _pos;
+    };
 }
 
 namespace gui
 {
     auto model_scale = glm::vec3(0.5, 0.5, 0.5);
     auto model_speed = 0.1f;
-    auto wall_force_weight = 0.1f;
 
     auto create_descriptor_pool(VkDevice logical_device, decltype(cleanup::general_queue)& cleanup_queue)
     {
@@ -1422,7 +1449,7 @@ namespace gui
         ImGui::Separator();
         ImGui::DragFloat("Visual range", &boids::visual_range, 0.1f, 0.f, 30.f);
         ImGui::Separator();
-        ImGui::DragFloat("Wall force", &wall_force_weight, 0.01f, 0.f, 1.f);
+        ImGui::DragFloat("Wall force", &boids::wall_force_weight, 0.01f, 0.f, 1.f);
 
         if (ImGui::CollapsingHeader(fmt::format("Instances [{}]", cones.size()).c_str()))
         {
@@ -1926,26 +1953,14 @@ namespace aquarium
         return { false, {} };
     }
 
-    auto steer_away_from_walls(const cone_instance& boid)
-    {
-        const auto front_distance = glm::distance2(glm::vec3(boid.position), glm::vec3(boid.position.x, boid.position.y, max_range.z));
-        const auto back_distance = glm::distance2(glm::vec3(boid.position), glm::vec3(boid.position.x, boid.position.y, min_range.z));
-        const auto top_distance = glm::distance2(glm::vec3(boid.position), glm::vec3(boid.position.x, max_range.y, boid.position.z));
-        const auto bottom_distance = glm::distance2(glm::vec3(boid.position), glm::vec3(boid.position.x, min_range.y, boid.position.z));
-        const auto left_distance = glm::distance2(glm::vec3(boid.position), glm::vec3(min_range.x, boid.position.y, boid.position.z));
-        const auto right_distance = glm::distance2(glm::vec3(boid.position), glm::vec3(max_range.x, boid.position.y, boid.position.z));
-
-        auto velocity_diff = glm::vec3(0);
-
-        velocity_diff += inward_faces_normals.front / front_distance;
-        velocity_diff += inward_faces_normals.back / back_distance;
-        velocity_diff += inward_faces_normals.top / top_distance;
-        velocity_diff += inward_faces_normals.bottom / bottom_distance;
-        velocity_diff += inward_faces_normals.left / left_distance;
-        velocity_diff += inward_faces_normals.right / right_distance;
-
-        return velocity_diff * gui::wall_force_weight;
-    }
+    const auto wall_repellents = std::array{
+        boids::plane_repellent(inward_faces_normals.front, max_range.z),
+        boids::plane_repellent(inward_faces_normals.back, min_range.z),
+        boids::plane_repellent(inward_faces_normals.top, max_range.y),
+        boids::plane_repellent(inward_faces_normals.bottom, min_range.y),
+        boids::plane_repellent(inward_faces_normals.right, max_range.x),
+        boids::plane_repellent(inward_faces_normals.left, min_range.x),
+    };
 
     constexpr auto vertex_input_state = VkPipelineVertexInputStateCreateInfo{
         .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
@@ -2322,10 +2337,13 @@ int main()
         for (std::size_t i = 0; i < instances_count; ++i)
         {
             auto& model = model_data[i];
-            const auto velocity_update1 = boids::steer(i, model_data_update_buffer);
-            const auto velocity_update2 = glm::vec4(aquarium::steer_away_from_walls(model), 0);
+            auto velocity_update = boids::steer(i, model_data_update_buffer);
+            for (const auto& repellent : aquarium::wall_repellents)
+            {
+                velocity_update += glm::vec4(repellent.get_velocity_diff(model), 0);
+            }
             model.velocity = model.direction;
-            model.velocity += velocity_update1 + velocity_update2;
+            model.velocity += velocity_update;
             model.velocity *= gui::model_speed;
             if (glm::length(model.velocity))
                 model.direction = glm::normalize(model.velocity);
