@@ -1,9 +1,11 @@
 #version 450
 
 layout(location = 0) in vec3 pos;
-layout(location = 1) in vec3 color;
+layout(location = 1) in vec3 normal;
 
-layout(location = 0) out vec4 frag_color;
+layout(location = 0) out vec4 object_color;
+layout(location = 1) out vec3 out_normal;
+layout(location = 2) out vec3 out_world_pos;
 
 layout(set = 0, binding = 0) uniform CameraData
 {
@@ -26,6 +28,9 @@ layout(set = 0, binding = 1) readonly buffer ModelData
 } model;
 
 void main() {
-    gl_Position = camera_data.projview * model.cones[gl_InstanceIndex].model_matrix * vec4(pos, 1.0);
-    frag_color = model.cones[gl_InstanceIndex].color;
+    vec4 world_pos = model.cones[gl_InstanceIndex].model_matrix * vec4(pos, 1.0);
+    gl_Position = camera_data.projview * world_pos;
+    object_color = model.cones[gl_InstanceIndex].color;
+    out_normal = normalize(mat3(transpose(inverse(model.cones[gl_InstanceIndex].model_matrix))) * normal);
+    out_world_pos = world_pos.xyz;
 }

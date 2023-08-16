@@ -58,7 +58,7 @@ namespace cleanup
 struct vertex
 {
     glm::vec3 pos;
-    glm::vec3 color;
+    glm::vec3 normal;
 };
 
 struct cone_instance
@@ -66,8 +66,35 @@ struct cone_instance
     glm::vec4 position = glm::vec4(0, 0, 0, 0);
     glm::vec4 direction = glm::vec4(0, 0, 0, 0);
     glm::vec4 velocity = glm::vec4(0, 0, 0, 0);
-    glm::vec4 color = glm::vec4(0, 0, 0, 1);
+    glm::vec4 color = glm::vec4(.5, .5, .5, 1);
     glm::mat4 model_matrix = glm::mat4(1.);
+};
+
+struct directional_light
+{
+    glm::vec4 direction;
+    glm::vec4 ambient;
+    glm::vec4 diffuse;
+    glm::vec4 specular;
+};
+
+struct point_light
+{
+    glm::vec4 position;
+    glm::vec4 ambient;
+    glm::vec4 diffuse;
+    glm::vec4 specular;
+
+    float constant;
+    float linear;
+    float quadratic;
+    float _padding;
+};
+
+struct lights_data
+{
+    std::vector<directional_light> dir_lights;
+    std::vector<point_light> point_lights;
 };
 
 auto read_file(const std::string_view filename)
@@ -1105,6 +1132,20 @@ auto create_descriptor_sets_layouts(VkDevice logical_device, decltype(cleanup::g
             .descriptorCount = 1,
             .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
             .pImmutableSamplers = nullptr
+        },
+        VkDescriptorSetLayoutBinding{
+            .binding = 2,
+            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .descriptorCount = 1,
+            .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+            .pImmutableSamplers = nullptr
+        },
+        VkDescriptorSetLayoutBinding{
+            .binding = 3,
+            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .descriptorCount = 1,
+            .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+            .pImmutableSamplers = nullptr
         }
     };
 
@@ -1194,6 +1235,22 @@ auto create_descriptor_update_template(VkDevice logical_device, VkDescriptorSetL
             .descriptorCount = 1,
             .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
             .offset = sizeof(VkDescriptorBufferInfo), // TODO lmao, fix this shit. It's an offset in pData array of vkCmdUpdateDescriptorSetWithTemplate
+            .stride = 0
+        },
+        VkDescriptorUpdateTemplateEntry {
+            .dstBinding = 2,
+            .dstArrayElement = 0,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .offset = 2*sizeof(VkDescriptorBufferInfo), // TODO lmao, fix this shit. It's an offset in pData array of vkCmdUpdateDescriptorSetWithTemplate
+            .stride = 0
+        },
+        VkDescriptorUpdateTemplateEntry {
+            .dstBinding = 3,
+            .dstArrayElement = 0,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .offset = 3*sizeof(VkDescriptorBufferInfo), // TODO lmao, fix this shit. It's an offset in pData array of vkCmdUpdateDescriptorSetWithTemplate
             .stride = 0
         },
     };
@@ -1319,6 +1376,207 @@ namespace boids
     };
 }
 
+namespace light
+{
+    auto lights = lights_data{
+        .dir_lights = std::vector{
+            directional_light{
+                .direction = { 0, -1, 0, 0 },
+                .ambient = { 0.5, 0.5, 0.5, 0 },
+                .diffuse = { 0.5, 0.5, 0.5, 0 },
+                .specular = { 1., 1., 1., 0 }
+            },
+        },
+        .point_lights = std::vector<point_light>{
+            point_light{
+                .position = { 15, 15, 0, 0 },
+                .ambient = { 0, 1, 0, 1 },
+                .diffuse = { 0, 1, 0, 1 },
+                .specular = { 0, 1, 0, 1 },
+                .constant = 1.f,
+                .linear = 0.09f,
+                .quadratic = 0.032f
+            },
+            point_light{
+                .position = { -15, 15, 0, 0 },
+                .ambient = { 0, 0, 1, 1 },
+                .diffuse = { 0, 0, 1, 1 },
+                .specular = { 0, 0, 1, 1 },
+                .constant = 1.f,
+                .linear = 0.09f,
+                .quadratic = 0.032f
+            },
+        }
+    };
+
+    constexpr auto vertex_input_state = VkPipelineVertexInputStateCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .vertexBindingDescriptionCount = 0,
+        .pVertexBindingDescriptions = nullptr,
+        .vertexAttributeDescriptionCount = 0,
+        .pVertexAttributeDescriptions = nullptr
+    };
+
+    constexpr auto input_assembly_state = VkPipelineInputAssemblyStateCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+        .primitiveRestartEnable = VK_FALSE
+    };
+
+    auto viewport = VkViewport{
+        .x = 0.f,
+        .y = 0.f,
+        .width = 0.f,
+        .height = 0.f,
+        .minDepth = 0.f,
+        .maxDepth = 1.f
+    };
+
+    auto scissors = VkRect2D{
+        .offset = VkOffset2D{
+            .x = 0,
+            .y = 0,
+        },
+        .extent = {}
+    };
+
+    const auto viewport_state = VkPipelineViewportStateCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .viewportCount = 1,
+        .pViewports = &viewport,
+        .scissorCount = 1,
+        .pScissors = &scissors,
+    };
+
+    constexpr auto rasterization_state = VkPipelineRasterizationStateCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .depthClampEnable = VK_FALSE,
+        .rasterizerDiscardEnable = VK_FALSE,
+        .polygonMode = VK_POLYGON_MODE_FILL,
+        .cullMode = VK_CULL_MODE_NONE,
+        .frontFace = VK_FRONT_FACE_CLOCKWISE,
+        .depthBiasEnable = VK_FALSE,
+        .depthBiasConstantFactor = 0.f,
+        .depthBiasClamp = 0.f,
+        .depthBiasSlopeFactor = 0.f,
+        .lineWidth = 2.f
+    };
+
+    constexpr auto multisample_state = VkPipelineMultisampleStateCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .rasterizationSamples = msaa_samples,
+        .sampleShadingEnable = VK_FALSE,
+        .minSampleShading = 1.f,
+        .pSampleMask = nullptr,
+        .alphaToCoverageEnable = VK_FALSE,
+        .alphaToOneEnable = VK_FALSE
+    };
+
+    constexpr auto depth_stencil_state = VkPipelineDepthStencilStateCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .depthTestEnable = VK_TRUE,
+        .depthWriteEnable = VK_TRUE,
+        .depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL,
+        .depthBoundsTestEnable = VK_FALSE,
+        .stencilTestEnable = VK_FALSE,
+        .front = {},
+        .back = {},
+        .minDepthBounds = 0.f,
+        .maxDepthBounds = 1.f
+    };
+
+    constexpr auto color_blend_attachment_state = VkPipelineColorBlendAttachmentState{
+        .blendEnable = VK_TRUE,
+        .srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA,
+        .dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+        .colorBlendOp = VK_BLEND_OP_ADD,
+        .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
+        .dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO,
+        .alphaBlendOp = VK_BLEND_OP_ADD,
+        .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT
+    };
+
+    const auto color_blend_state = VkPipelineColorBlendStateCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .logicOpEnable = VK_FALSE,
+        .logicOp = VK_LOGIC_OP_COPY,
+        .attachmentCount = 1,
+        .pAttachments = &color_blend_attachment_state,
+        .blendConstants = {0.f, 0.f, 0.f, 0.f}
+    };
+
+    auto shader_stages = std::array{
+        VkPipelineShaderStageCreateInfo{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .stage = VK_SHADER_STAGE_VERTEX_BIT,
+            .module = 0,
+            .pName = shader_entry_point.data(),
+            .pSpecializationInfo = nullptr
+        },
+        VkPipelineShaderStageCreateInfo{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
+            .module = 0,
+            .pName = shader_entry_point.data(),
+            .pSpecializationInfo = nullptr
+        }
+    };
+
+    auto get_pipeline_create_info(VkDevice logical_device, const std::vector<VkShaderModule>& shaders, VkPipelineLayout pipeline_layout, VkRenderPass render_pass, const VkExtent2D& window_extent)
+    {
+        assert(shaders.size() == shader_stages.size());
+        for (std::size_t i = 0; i < shaders.size(); ++i)
+            shader_stages[i].module = shaders[i];
+
+        viewport.width = window_extent.width;
+        viewport.height = window_extent.height;
+
+        scissors.extent = window_extent;
+
+        const auto create_info = VkGraphicsPipelineCreateInfo{
+            .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .stageCount = static_cast<uint32_t>(shader_stages.size()),
+            .pStages = shader_stages.data(),
+            .pVertexInputState = &vertex_input_state,
+            .pInputAssemblyState = &input_assembly_state,
+            .pTessellationState = nullptr,
+            .pViewportState = &viewport_state,
+            .pRasterizationState = &rasterization_state,
+            .pMultisampleState = &multisample_state,
+            .pDepthStencilState = &depth_stencil_state,
+            .pColorBlendState = &color_blend_state,
+            .pDynamicState = nullptr,
+            .layout = pipeline_layout,
+            .renderPass = render_pass,
+            .subpass = 0,
+            .basePipelineHandle = VK_NULL_HANDLE,
+            .basePipelineIndex = 0
+        };
+
+        return create_info;
+    }
+}
+
 namespace gui
 {
     auto model_scale = glm::vec3(0.5, 0.5, 0.5);
@@ -1437,9 +1695,10 @@ namespace gui
         ImGui::Text(fmt::format(aligned_vectors_format, "up:", up_str).c_str());
         ImGui::Text(fmt::format(aligned_vectors_format, "front:", front_str).c_str());
         ImGui::Text(fmt::format(aligned_vectors_format, "right:", right_str).c_str());
-        ImGui::DragFloat("Speed", &model_speed, 0.001, -1.f, 1.f);
 
         ImGui::Text("Boids params");
+        ImGui::Separator();
+        ImGui::DragFloat("Speed", &model_speed, 0.001, -1.f, 1.f);
         ImGui::Separator();
         ImGui::DragFloat("Cohesion", &boids::cohesion_weight, 0.001, 0.f, 1.f);
         ImGui::Separator();
@@ -1450,6 +1709,39 @@ namespace gui
         ImGui::DragFloat("Visual range", &boids::visual_range, 0.1f, 0.f, 30.f);
         ImGui::Separator();
         ImGui::DragFloat("Wall force", &boids::wall_force_weight, 0.01f, 0.f, 1.f);
+
+        if (ImGui::CollapsingHeader(fmt::format("lights [{}]", light::lights.dir_lights.size() + light::lights.point_lights.size()).c_str()))
+        {
+            for (std::size_t i = 0; i < light::lights.dir_lights.size(); ++i)
+            {
+                if (ImGui::TreeNode(fmt::format("Dir light {}", i).c_str()))
+                {
+                    auto& light = light::lights.dir_lights[i];
+
+                    ImGui::DragFloat3("Direction", &light.direction[0], 0.01, -1.f, 1.f);
+                    ImGui::ColorEdit4("Ambient", &light.ambient[0], ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_PickerHueWheel);
+                    ImGui::ColorEdit4("Diffuse", &light.diffuse[0], ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_PickerHueWheel);
+                    ImGui::ColorEdit4("Specular", &light.specular[0], ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_PickerHueWheel);
+                    ImGui::TreePop();
+                }
+            }
+
+            for (std::size_t i = 0; i < light::lights.point_lights.size(); ++i)
+            {
+                if (ImGui::TreeNode(fmt::format("Point light {}", i).c_str()))
+                {
+                    auto& light = light::lights.point_lights[i];
+
+                    ImGui::DragFloat3("Position", &light.position[0], 0.01, -30.f, 30.f);
+                    ImGui::ColorEdit4("Ambient", &light.ambient[0], ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_PickerHueWheel);
+                    ImGui::ColorEdit4("Diffuse", &light.diffuse[0], ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_PickerHueWheel);
+                    ImGui::ColorEdit4("Specular", &light.specular[0], ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_PickerHueWheel);
+                    ImGui::DragFloat("Linear", &light.linear, 0.01, 0.0f, 1.0);
+                    ImGui::DragFloat("Quadratic", &light.quadratic, 0.01, 0.0f, 1.0);
+                    ImGui::TreePop();
+                }
+            }
+        }
 
         if (ImGui::CollapsingHeader(fmt::format("Instances [{}]", cones.size()).c_str()))
         {
@@ -1630,46 +1922,52 @@ namespace cone
     {
         constexpr auto base_vertices_count = 12;
         constexpr auto angle_step = 2 * std::numbers::pi / base_vertices_count;
+        constexpr auto base_triangles_count = base_vertices_count;
+        constexpr auto side_triangles_count = base_vertices_count;
+        constexpr auto triangles_count = base_triangles_count + side_triangles_count;
+        constexpr auto total_vertices_count = triangles_count * 3;
 
-        auto vertices = std::vector<glm::vec3>(base_vertices_count + 2);
-        vertices[0] = glm::vec3(0, 0, 0);
+        const auto center_vertex = glm::vec3(0, 0, 0);
+        const auto top_vertex = glm::vec3(0, 2.f, 0);
+
+        auto base_vertices = std::vector<glm::vec3>(base_vertices_count);
+        // generate circle
         for (std::size_t i = 0; i < base_vertices_count; ++i)
         {
             const auto angle = i * angle_step;
-            vertices[i+1] = glm::vec3(std::cos(angle), 0.f, std::sin(angle));
+            base_vertices[i] = glm::vec3(std::sin(angle), 0.f, std::cos(angle));
         }
-        vertices[vertices.size() - 1] = glm::vec3(0, 2.f, 0);
 
-        const auto triangles_count = base_vertices_count * 2 * 3;
-        auto indices = std::vector<uint16_t>(triangles_count);
-
-        // side triangles
-        for (std::size_t i = 0; i < base_vertices_count; ++i)
+        auto vertices = std::vector<vertex>(total_vertices_count);
+        for (std::size_t i = 0; i < base_triangles_count; ++i)
         {
-            indices[3*i + 0] = 0;
-            indices[3*i + 1] = i + 1;
-            indices[3*i + 2] = i + 2;
+            const auto A = base_vertices[i];
+            const auto B = i == base_vertices_count - 1 ? base_vertices[0] : base_vertices[i + 1];
+            const auto C = center_vertex;
+            const auto AB = B - A;
+            const auto AC = C - A;
+            const auto normal = glm::normalize(glm::cross(AC, AB));
+
+            vertices[3 * i + 0] = { B, normal };
+            vertices[3 * i + 1] = { A, normal };
+            vertices[3 * i + 2] = { C, normal };
         }
 
-        indices[3 * base_vertices_count - 1] = 1;
-
-        // base triangles
-        for (std::size_t i = 0; i < base_vertices_count; ++i)
+        for (std::size_t i = 0; i < side_triangles_count; ++i)
         {
-            indices[3*i + 3*base_vertices_count + 0] = base_vertices_count + 1;
-            indices[3*i + 3*base_vertices_count + 1] = i + 2;
-            indices[3*i + 3*base_vertices_count + 2] = i + 1;
+            const auto A = base_vertices[i];
+            const auto B = i == base_vertices_count - 1 ? base_vertices[0] : base_vertices[i + 1];
+            const auto C = top_vertex;
+            const auto AB = B - A;
+            const auto AC = C - A;
+            const auto normal = glm::normalize(glm::cross(AB, AC));
+
+            vertices[3 * base_triangles_count + 3 * i + 0] = { A, normal };
+            vertices[3 * base_triangles_count + 3 * i + 1] = { B, normal };
+            vertices[3 * base_triangles_count + 3 * i + 2] = { C, normal };
         }
 
-        indices[3 * 2 * base_vertices_count - 2] = 1;
-
-        auto triangle_vertex_buffer = std::vector<vertex>(vertices.size());
-        for (std::size_t i = 0; i < vertices.size(); ++i)
-        {
-            triangle_vertex_buffer[i] = { vertices[i], { 0, 0, 0 } };
-        }
-
-        return std::tuple{ triangle_vertex_buffer, indices };
+        return vertices;
     }
 
     auto shader_stages = std::array{
@@ -2200,16 +2498,19 @@ int main()
     const auto cone_shaders = load_shaders(logical_device, { shader_path::vertex::triangle, shader_path::fragment::triangle }, cleanup::general_queue);
     const auto grid_shaders = load_shaders(logical_device, { shader_path::vertex::grid, shader_path::fragment::grid }, cleanup::general_queue);
     const auto aquarium_shaders = load_shaders(logical_device, { shader_path::vertex::aquarium, shader_path::fragment::aquarium }, cleanup::general_queue);
+    const auto debug_cube_shaders = load_shaders(logical_device, { shader_path::vertex::cube, shader_path::fragment::cube }, cleanup::general_queue);
 
     auto graphics_pipelines = create_graphics_pipelines(logical_device, {
         cone::get_pipeline_create_info(logical_device, cone_shaders, pipeline_layout, render_pass, window_extent),
         grid::get_pipeline_create_info(logical_device, grid_shaders, pipeline_layout, render_pass, window_extent),
         aquarium::get_pipeline_create_info(logical_device, aquarium_shaders, pipeline_layout, render_pass, window_extent),
+        light::get_pipeline_create_info(logical_device, debug_cube_shaders, pipeline_layout, render_pass, window_extent),
     }, cleanup::swapchain_queue);
 
     auto& cone_pipeline = graphics_pipelines[0];
     auto& grid_pipeline = graphics_pipelines[1];
     auto& aquarium_pipeline = graphics_pipelines[2];
+    auto& debug_cube_pipeilne = graphics_pipelines[3];
 
     constexpr auto overlapping_frames_count = 2;
 
@@ -2242,6 +2543,18 @@ int main()
     VK_CHECK(vkMapMemory(logical_device, model_data_memory, 0, VK_WHOLE_SIZE, 0, &model_data_memory_ptr));
     const auto model_data_descriptor_buffer_infos = get_descriptor_buffer_infos(model_data_buffer, model_data_padded_size, overlapping_frames_count);
 
+    const auto dir_lights_data_padded_size = pad_uniform_buffer_size(light::lights.dir_lights.size() * sizeof(decltype(light::lights.dir_lights)::value_type), physical_device_properties.limits.minUniformBufferOffsetAlignment);
+    const auto [dir_lights_data_buffer, dir_lights_data_memory] = create_buffer(logical_device, physical_device, overlapping_frames_count * dir_lights_data_padded_size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, cleanup::general_queue);
+    void* dir_lights_data_memory_ptr = nullptr;
+    VK_CHECK(vkMapMemory(logical_device, dir_lights_data_memory, 0, VK_WHOLE_SIZE, 0, &dir_lights_data_memory_ptr));
+    const auto dir_lights_data_descriptor_buffer_infos = get_descriptor_buffer_infos(dir_lights_data_buffer, dir_lights_data_padded_size, overlapping_frames_count);
+
+    const auto point_lights_data_padded_size = pad_uniform_buffer_size(light::lights.point_lights.size() * sizeof(decltype(light::lights.point_lights)::value_type), physical_device_properties.limits.minUniformBufferOffsetAlignment);
+    const auto [point_lights_data_buffer, point_lights_data_memory] = create_buffer(logical_device, physical_device, overlapping_frames_count * point_lights_data_padded_size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, cleanup::general_queue);
+    void* point_lights_data_memory_ptr = nullptr;
+    VK_CHECK(vkMapMemory(logical_device, point_lights_data_memory, 0, VK_WHOLE_SIZE, 0, &point_lights_data_memory_ptr));
+    const auto point_lights_data_descriptor_buffer_infos = get_descriptor_buffer_infos(point_lights_data_buffer, point_lights_data_padded_size, overlapping_frames_count);
+
     auto [color_image, color_image_view, color_image_memory] = create_color_image(logical_device, physical_device, surface_format.format, window_extent, cleanup::swapchain_queue);
     auto [depth_image, depth_image_view, depth_image_memory] = create_depth_image(logical_device, physical_device, window_extent, cleanup::swapchain_queue);
 
@@ -2252,13 +2565,13 @@ int main()
     const auto command_pool = create_command_pool(logical_device, queue_family_index, cleanup::general_queue);
     const auto command_buffers = create_command_buffers(logical_device, command_pool, overlapping_frames_count, cleanup::general_queue);
 
-    const auto [cone_vertex_buffer, cone_index_buffer] = cone::generate_vertex_data();
+    const auto cone_vertex_buffer = cone::generate_vertex_data();
     const auto cone_vertex_buffer_size = cone_vertex_buffer.size() * sizeof(vertex);
-    const auto cone_index_buffer_size = cone_index_buffer.size() * sizeof(decltype(cone_index_buffer)::value_type);
+    //const auto cone_index_buffer_size = cone_index_buffer.size() * sizeof(decltype(cone_index_buffer)::value_type);
 
-    const auto [vertex_buffer, device_memory] = create_buffer(logical_device, physical_device, cone_vertex_buffer_size + cone_index_buffer_size, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, cleanup::general_queue);
+    const auto [vertex_buffer, device_memory] = create_buffer(logical_device, physical_device, cone_vertex_buffer_size, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, cleanup::general_queue);
     copy_memory(logical_device, device_memory, 0, cone_vertex_buffer.data(), cone_vertex_buffer_size);
-    copy_memory(logical_device, device_memory, cone_vertex_buffer_size, cone_index_buffer.data(), cone_index_buffer_size);
+    //copy_memory(logical_device, device_memory, cone_vertex_buffer_size, cone_index_buffer.data(), cone_index_buffer_size);
 
     const auto image_available_semaphores = create_semaphores(logical_device, overlapping_frames_count, cleanup::general_queue);
     const auto rendering_finished_semaphores = create_semaphores(logical_device, overlapping_frames_count, cleanup::general_queue);
@@ -2295,6 +2608,7 @@ int main()
                 cone_pipeline = graphics_pipelines[0];
                 grid_pipeline = graphics_pipelines[1];
                 aquarium_pipeline = graphics_pipelines[2];
+                debug_cube_pipeilne = graphics_pipelines[3];
                 continue;
             }
             else if (result != VK_SUCCESS)
@@ -2329,11 +2643,14 @@ int main()
             }
         };
 
+        // TODO flush buffer before descriptor set update?
+        // update camera
         camera_data.position = glm::vec4(g_camera.position(), 0.f);
         camera_data.viewproj = flip_clip_space * g_camera.projection(window_extent.width, window_extent.height) * g_camera.view();
         std::memcpy(reinterpret_cast<char*>(camera_data_memory_ptr) + current_frame * camera_data_padded_size, &camera_data, sizeof(camera_data));
+
+        // update boids
         model_data_update_buffer = std::vector(model_data_span.begin(), model_data_span.end());
-        // TODO flush buffer before descriptor set update?
         for (std::size_t i = 0; i < instances_count; ++i)
         {
             auto& model = model_data[i];
@@ -2358,14 +2675,20 @@ int main()
             }
 
             model.model_matrix = glm::translate(glm::mat4(1.), glm::vec3(model.position));
-            model.model_matrix = model.model_matrix * glm::toMat4(glm::rotation({0, 1, 0}, glm::normalize(glm::vec3(model.direction))));
+            model.model_matrix = model.model_matrix * glm::mat4(glm::rotation({0, 1, 0}, glm::normalize(glm::vec3(model.direction))));
             model.model_matrix = glm::scale(model.model_matrix, gui::model_scale * glm::vec3(0.5));
         }
         std::memcpy(reinterpret_cast<char*>(model_data_memory_ptr) + current_frame * model_data_padded_size, &model_data, sizeof(model_data));
 
+        // update lights
+        std::memcpy(reinterpret_cast<char*>(dir_lights_data_memory_ptr) + current_frame * dir_lights_data_padded_size, light::lights.dir_lights.data(), light::lights.dir_lights.size() * sizeof(decltype(light::lights.dir_lights)::value_type));
+        std::memcpy(reinterpret_cast<char*>(point_lights_data_memory_ptr) + current_frame * point_lights_data_padded_size, light::lights.point_lights.data(), light::lights.point_lights.size() * sizeof(decltype(light::lights.point_lights)::value_type));
+
         const auto buffer_infos = std::array{
             camera_data_descriptor_buffer_infos[current_frame],
-            model_data_descriptor_buffer_infos[current_frame]
+            model_data_descriptor_buffer_infos[current_frame],
+            dir_lights_data_descriptor_buffer_infos[current_frame],
+            point_lights_data_descriptor_buffer_infos[current_frame]
         };
         vkUpdateDescriptorSetWithTemplate(logical_device, descriptor_sets[current_frame], descriptor_update_template, buffer_infos.data());
 
@@ -2389,8 +2712,12 @@ int main()
         vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, cone_pipeline);
         const auto offsets = std::array{ VkDeviceSize{ 0 } };
         vkCmdBindVertexBuffers(command_buffer, 0, 1, &vertex_buffer, offsets.data());
-        vkCmdBindIndexBuffer(command_buffer, vertex_buffer, cone_vertex_buffer_size, VK_INDEX_TYPE_UINT16);
-        vkCmdDrawIndexed(command_buffer, cone_index_buffer.size(), instances_count, 0, 0, 0);
+        //vkCmdBindIndexBuffer(command_buffer, vertex_buffer, cone_vertex_buffer_size, VK_INDEX_TYPE_UINT16);
+        vkCmdDraw(command_buffer, cone_vertex_buffer.size(), instances_count, 0, 0);
+        //vkCmdDrawIndexed(command_buffer, cone_index_buffer.size(), instances_count, 0, 0, 0);
+
+        vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, debug_cube_pipeilne);
+        vkCmdDraw(command_buffer, 36, light::lights.point_lights.size(), 0, 0);
 
         vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, aquarium_pipeline);
         vkCmdDraw(command_buffer, 36, 1, 0, 0);

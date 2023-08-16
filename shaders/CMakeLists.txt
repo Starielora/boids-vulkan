@@ -72,6 +72,18 @@ project(shaders)
         VARIABLE_NAME_HEADER aquarium
     )
 
+    add_shader(VERTEX
+        INPUT_FILE debug_cube.vert
+        OUTPUT_FILE debug_cube.vert.spv
+        VARIABLE_NAME_HEADER cube
+    )
+
+    add_shader(FRAGMENT
+        INPUT_FILE debug_cube.frag
+        OUTPUT_FILE debug_cube.frag.spv
+        VARIABLE_NAME_HEADER cube
+    )
+
     set(shaders_header_contents
 "#pragma once
 
