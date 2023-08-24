@@ -89,6 +89,8 @@ project(shaders)
 
 #include <string_view>
 
+constexpr auto shader_entry_point = std::string_view(\"main\");
+
 namespace shader_path::vertex {${vertex_shaders}
 }
 

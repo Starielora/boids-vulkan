@@ -7,7 +7,28 @@ project(boids-vulkan)
     add_subdirectory(deps)
     add_subdirectory(shaders)
 
-    add_executable(boids main.cpp camera.hpp)
+    add_executable(boids
+        main.cpp
+        constants.hpp
+        camera.hpp
+        cleanup.hpp
+        cleanup.cpp
+        vkcheck.hpp
+        setup.hpp
+        setup.cpp
+        boids.hpp
+        boids.cpp
+        light.hpp
+        light.cpp
+        cone.hpp
+        cone.cpp
+        aquarium.hpp
+        aquarium.cpp
+        grid.hpp
+        grid.cpp
+        gui.hpp
+        gui.cpp
+    )
 
     target_link_libraries(boids PRIVATE volk glm glfw spdlog::spdlog imgui)
 
