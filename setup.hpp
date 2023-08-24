@@ -1,10 +1,7 @@
 #pragma once
 
 #include "cleanup.hpp"
-#include "camera.hpp"
 
-#define NOMINMAX
-#define VK_NO_PROTOTYPES
 #include <Volk/volk.h>
 #include <GLFW/glfw3.h>
 
@@ -53,7 +50,6 @@ std::tuple<VkImage, VkImageView, VkDeviceMemory> create_color_image(VkDevice log
 std::tuple<VkImage, VkMemoryRequirements> create_depth_image(VkDevice logical_device, VkExtent2D swapchain_extent, cleanup::queue_type& cleanup_queue);
 VkImageView create_depth_image_view(VkDevice logical_device, VkImage image, cleanup::queue_type& cleanup_queue);
 std::tuple<VkImage, VkImageView, VkDeviceMemory> create_depth_image(VkDevice logical_device, VkPhysicalDevice physical_device, VkExtent2D swapchain_extent, cleanup::queue_type& cleanup_queue);
-void handle_keyboard(GLFWwindow* window, camera& camera);
 std::tuple<VkBuffer, VkMemoryRequirements> create_buffer(VkDevice logical_device, std::size_t size, VkBufferUsageFlags usage, cleanup::queue_type& cleanup_queue);
 std::tuple<VkBuffer, VkDeviceMemory> create_buffer(VkDevice logical_device, VkPhysicalDevice physical_device, std::size_t size, VkBufferUsageFlags usage, VkMemoryPropertyFlags memory_flags, cleanup::queue_type& cleanup_queue);
 void copy_memory(VkDevice logical_device, VkDeviceMemory device_memory, uint32_t offset, const void* in_data, std::size_t size);

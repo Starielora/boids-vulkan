@@ -1,8 +1,8 @@
 #include "cone.hpp"
 #include "constants.hpp"
 #include "shaders/shaders.h"
+#include "vertex.hpp"
 
-#define VK_NO_PROTOTYPES
 #include <Volk/volk.h>
 #include <glm/glm.hpp>
 
@@ -253,7 +253,7 @@ namespace cone
         return create_info;
     }
 
-    void generate_model_data(std::span<cone_instance>& cones, glm::vec3 min_range, glm::vec3 max_range)
+    void generate_model_data(std::span<boids::boid>& cones, glm::vec3 min_range, glm::vec3 max_range)
     {
         auto rd = std::random_device{};
         auto gen = std::mt19937(rd());

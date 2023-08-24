@@ -1,5 +1,6 @@
 #include "light.hpp"
 #include "constants.hpp"
+#include "shaders/shaders.h"
 
 namespace light
 {

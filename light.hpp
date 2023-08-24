@@ -1,8 +1,5 @@
 #pragma once
 
-#include "shaders/shaders.h"
-
-#define VK_NO_PROTOTYPES
 #include <Volk/volk.h>
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>

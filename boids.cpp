@@ -2,7 +2,7 @@
 
 namespace boids
 {
-    glm::vec4 steer(std::size_t index, const std::vector<cone_instance>& boids, float visual_range, float cohesion_weight, float separation_weight, float alignment_weight)
+    glm::vec4 steer(std::size_t index, const std::vector<boid>& boids, float visual_range, float cohesion_weight, float separation_weight, float alignment_weight)
     {
         assert(index < boids.size());
         const auto& current_boid = boids[index];

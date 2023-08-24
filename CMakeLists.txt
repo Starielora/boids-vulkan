@@ -28,6 +28,7 @@ project(boids-vulkan)
         grid.cpp
         gui.hpp
         gui.cpp
+        vertex.hpp
     )
 
     target_link_libraries(boids PRIVATE volk glm glfw spdlog::spdlog imgui)
@@ -35,3 +36,4 @@ project(boids-vulkan)
     add_dependencies(boids shaders)
 
     target_include_directories(boids PRIVATE ${CMAKE_BINARY_DIR})
+    target_compile_definitions(boids PRIVATE NOMINMAX)

@@ -11,20 +11,11 @@
 #include "gui.hpp"
 
 #include <glm/glm.hpp>
-#include <glm/gtx/quaternion.hpp>
-
 #include <spdlog/spdlog.h>
 #include <shaders/shaders.h>
 
 #include <vector>
-#include <limits>
-#include <optional>
-#include <set>
-#include <string_view>
 #include <array>
-#include <numbers>
-#include <cmath>
-#include <span>
 
 constexpr bool VALIDATION_LAYERS = true;
 
@@ -124,23 +115,53 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
     }
 }
 
+void handle_keyboard(GLFWwindow* window, camera& camera)
+{
+    if (glfwGetKey(window, GLFW_KEY_ESCAPE))
+    {
+        glfwSetWindowShouldClose(window, true);
+    }
+
+    if (glfwGetKey(window, GLFW_KEY_W))
+    {
+        camera.move_forward();
+    }
+
+    if (glfwGetKey(window, GLFW_KEY_S))
+    {
+        camera.move_back();
+    }
+
+    if (glfwGetKey(window, GLFW_KEY_A))
+    {
+        camera.strafe_left();
+    }
+
+    if (glfwGetKey(window, GLFW_KEY_D))
+    {
+        camera.strafe_right();
+    }
+}
+
 auto recreate_graphics_pipeline_and_swapchain(GLFWwindow* window, VkDevice logical_device, VkPhysicalDevice physical_device, const std::vector<std::vector<VkShaderModule>>& shader_modules, VkPipelineLayout pipeline_layout, VkRenderPass render_pass, VkSurfaceKHR surface, uint32_t queue_family_index, VkFormat swapchain_format, cleanup::queue_type& cleanup_queue)
 {
     const auto window_extent = window::get_extent(window);
     spdlog::info("New extent: {}, {}", window_extent.width, window_extent.height);
 
-    assert(shader_modules.size() == 3);
+    assert(shader_modules.size() == 4);
     const auto& cone_shaders = shader_modules[0];
     const auto& grid_shaders = shader_modules[1];
     const auto& aquarium_shaders = shader_modules[2];
+    const auto& debug_cube_shaders = shader_modules[3];
 
     auto graphics_pipelines = create_graphics_pipelines(logical_device, {
         cone::get_pipeline_create_info(logical_device, cone_shaders, pipeline_layout, render_pass, window_extent),
         grid::get_pipeline_create_info(logical_device, grid_shaders, pipeline_layout, render_pass, window_extent),
         aquarium::get_pipeline_create_info(logical_device, aquarium_shaders, pipeline_layout, render_pass, window_extent),
+        light::get_pipeline_create_info(logical_device, debug_cube_shaders, pipeline_layout, render_pass, window_extent),
     }, cleanup_queue);
-    const auto [swapchain, surface_format] = create_swapchain(logical_device, physical_device, surface, queue_family_index, window_extent, cleanup_queue);
-    const auto [swapchain_images, swapchain_image_views] = get_swapchain_images(logical_device, swapchain, surface_format.format, cleanup_queue);
+    const auto& [swapchain, surface_format] = create_swapchain(logical_device, physical_device, surface, queue_family_index, window_extent, cleanup_queue);
+    const auto& [swapchain_images, swapchain_image_views] = get_swapchain_images(logical_device, swapchain, surface_format.format, cleanup_queue);
 
     auto [color_image, color_image_view, color_image_memory] = create_color_image(logical_device, physical_device, swapchain_format, window_extent, cleanup_queue);
     auto [depth_image, depth_image_view, depth_image_memory] = create_depth_image(logical_device, physical_device, window_extent, cleanup_queue);
@@ -180,8 +201,8 @@ int main()
 
     const auto surface = window::create_vk_surface(vk_instance, window, general_queue);
 
-    const auto [physical_device, queue_family_index, physical_device_properties] = pick_physical_device(vk_instance, surface, required_device_extensions);
-    const auto [logical_device, present_queue] = create_logical_device(physical_device, queue_family_index, required_device_extensions, general_queue);
+    const auto& [physical_device, queue_family_index, physical_device_properties] = pick_physical_device(vk_instance, surface, required_device_extensions);
+    const auto& [logical_device, present_queue] = create_logical_device(physical_device, queue_family_index, required_device_extensions, general_queue);
 
     auto window_extent = window::get_extent(window);
 
@@ -221,32 +242,32 @@ int main()
     } camera_data;
 
     constexpr auto instances_count = 100;
-    cone_instance model_data[instances_count];
-    auto model_data_update_buffer = std::vector<cone_instance>(instances_count);
+    auto model_data = std::array<boids::boid, instances_count>();
+    auto model_data_update_buffer = std::vector<boids::boid>(instances_count);
 
-    auto model_data_span = std::span(model_data, model_data + instances_count);
+    auto model_data_span = std::span(model_data.data(), model_data.data() + instances_count);
     cone::generate_model_data(model_data_span, aquarium::min_range, aquarium::max_range);
 
     const auto camera_data_padded_size = pad_uniform_buffer_size(sizeof(camera_data), physical_device_properties.limits.minUniformBufferOffsetAlignment);
-    const auto [camera_data_buffer, camera_data_memory] = create_buffer(logical_device, physical_device, overlapping_frames_count * camera_data_padded_size, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, general_queue);
+    const auto& [camera_data_buffer, camera_data_memory] = create_buffer(logical_device, physical_device, overlapping_frames_count * camera_data_padded_size, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, general_queue);
     void* camera_data_memory_ptr = nullptr;
     VK_CHECK(vkMapMemory(logical_device, camera_data_memory, 0, VK_WHOLE_SIZE, 0, &camera_data_memory_ptr));
     const auto camera_data_descriptor_buffer_infos = get_descriptor_buffer_infos(camera_data_buffer, camera_data_padded_size, overlapping_frames_count);
 
     const auto model_data_padded_size = pad_uniform_buffer_size(sizeof(model_data), physical_device_properties.limits.minUniformBufferOffsetAlignment);
-    const auto [model_data_buffer, model_data_memory] = create_buffer(logical_device, physical_device, overlapping_frames_count * model_data_padded_size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, general_queue);
+    const auto& [model_data_buffer, model_data_memory] = create_buffer(logical_device, physical_device, overlapping_frames_count * model_data_padded_size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, general_queue);
     void* model_data_memory_ptr = nullptr;
     VK_CHECK(vkMapMemory(logical_device, model_data_memory, 0, VK_WHOLE_SIZE, 0, &model_data_memory_ptr));
     const auto model_data_descriptor_buffer_infos = get_descriptor_buffer_infos(model_data_buffer, model_data_padded_size, overlapping_frames_count);
 
     const auto dir_lights_data_padded_size = pad_uniform_buffer_size(lights.dir_lights.size() * sizeof(decltype(lights.dir_lights)::value_type), physical_device_properties.limits.minUniformBufferOffsetAlignment);
-    const auto [dir_lights_data_buffer, dir_lights_data_memory] = create_buffer(logical_device, physical_device, overlapping_frames_count * dir_lights_data_padded_size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, general_queue);
+    const auto& [dir_lights_data_buffer, dir_lights_data_memory] = create_buffer(logical_device, physical_device, overlapping_frames_count * dir_lights_data_padded_size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, general_queue);
     void* dir_lights_data_memory_ptr = nullptr;
     VK_CHECK(vkMapMemory(logical_device, dir_lights_data_memory, 0, VK_WHOLE_SIZE, 0, &dir_lights_data_memory_ptr));
     const auto dir_lights_data_descriptor_buffer_infos = get_descriptor_buffer_infos(dir_lights_data_buffer, dir_lights_data_padded_size, overlapping_frames_count);
 
     const auto point_lights_data_padded_size = pad_uniform_buffer_size(lights.point_lights.size() * sizeof(decltype(lights.point_lights)::value_type), physical_device_properties.limits.minUniformBufferOffsetAlignment);
-    const auto [point_lights_data_buffer, point_lights_data_memory] = create_buffer(logical_device, physical_device, overlapping_frames_count * point_lights_data_padded_size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, general_queue);
+    const auto& [point_lights_data_buffer, point_lights_data_memory] = create_buffer(logical_device, physical_device, overlapping_frames_count * point_lights_data_padded_size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, general_queue);
     void* point_lights_data_memory_ptr = nullptr;
     VK_CHECK(vkMapMemory(logical_device, point_lights_data_memory, 0, VK_WHOLE_SIZE, 0, &point_lights_data_memory_ptr));
     const auto point_lights_data_descriptor_buffer_infos = get_descriptor_buffer_infos(point_lights_data_buffer, point_lights_data_padded_size, overlapping_frames_count);
@@ -265,7 +286,7 @@ int main()
     const auto cone_vertex_buffer_size = cone_vertex_buffer.size() * sizeof(vertex);
     //const auto cone_index_buffer_size = cone_index_buffer.size() * sizeof(decltype(cone_index_buffer)::value_type);
 
-    const auto [vertex_buffer, device_memory] = create_buffer(logical_device, physical_device, cone_vertex_buffer_size, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, general_queue);
+    const auto& [vertex_buffer, device_memory] = create_buffer(logical_device, physical_device, cone_vertex_buffer_size, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, general_queue);
     copy_memory(logical_device, device_memory, 0, cone_vertex_buffer.data(), cone_vertex_buffer_size);
     //copy_memory(logical_device, device_memory, cone_vertex_buffer_size, cone_index_buffer.data(), cone_index_buffer_size);
 
@@ -313,7 +334,7 @@ int main()
                 spdlog::info("Destroy swapchain objects.");
                 cleanup::flush(swapchain_queue);
 
-                std::tie(graphics_pipelines, window_extent, swapchain, surface_format, swapchain_images, swapchain_image_views, swapchain_framebuffers, color_image, color_image_memory, color_image_view, depth_image, depth_image_view, depth_image_memory) = recreate_graphics_pipeline_and_swapchain(window, logical_device, physical_device, { cone_shaders, grid_shaders, aquarium_shaders }, pipeline_layout, render_pass, surface, queue_family_index, surface_format.format, swapchain_queue);
+                std::tie(graphics_pipelines, window_extent, swapchain, surface_format, swapchain_images, swapchain_image_views, swapchain_framebuffers, color_image, color_image_memory, color_image_view, depth_image, depth_image_view, depth_image_memory) = recreate_graphics_pipeline_and_swapchain(window, logical_device, physical_device, { cone_shaders, grid_shaders, aquarium_shaders, debug_cube_shaders }, pipeline_layout, render_pass, surface, queue_family_index, surface_format.format, swapchain_queue);
                 cone_pipeline = graphics_pipelines[0];
                 grid_pipeline = graphics_pipelines[1];
                 aquarium_pipeline = graphics_pipelines[2];

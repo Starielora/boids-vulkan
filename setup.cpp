@@ -908,34 +908,6 @@ std::tuple<VkImage, VkImageView, VkDeviceMemory> create_depth_image(VkDevice log
     return std::tuple{ image, view, memory };
 }
 
-void handle_keyboard(GLFWwindow* window, camera& camera)
-{
-    if (glfwGetKey(window, GLFW_KEY_ESCAPE))
-    {
-        glfwSetWindowShouldClose(window, true);
-    }
-
-    if (glfwGetKey(window, GLFW_KEY_W))
-    {
-        camera.move_forward();
-    }
-
-    if (glfwGetKey(window, GLFW_KEY_S))
-    {
-        camera.move_back();
-    }
-
-    if (glfwGetKey(window, GLFW_KEY_A))
-    {
-        camera.strafe_left();
-    }
-
-    if (glfwGetKey(window, GLFW_KEY_D))
-    {
-        camera.strafe_right();
-    }
-}
-
 std::tuple<VkBuffer, VkMemoryRequirements> create_buffer(VkDevice logical_device, std::size_t size, VkBufferUsageFlags usage, cleanup::queue_type& cleanup_queue)
 {
     const auto create_info = VkBufferCreateInfo{

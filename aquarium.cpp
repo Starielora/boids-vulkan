@@ -6,11 +6,6 @@
 
 namespace aquarium
 {
-    //constexpr float scale = 30.f;
-    //const auto min_range = glm::vec3(-scale, 0.f, -scale);
-    //const auto max_range = glm::vec3(scale, scale, scale);
-    //auto force_weight = 0.1;
-
     struct
     {
         glm::vec3 front = glm::vec3(0, 0, -1);
