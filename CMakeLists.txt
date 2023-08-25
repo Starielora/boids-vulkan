@@ -29,6 +29,8 @@ project(boids-vulkan)
         gui.hpp
         gui.cpp
         vertex.hpp
+        shader_module_cache.hpp
+        shader_module_cache.cpp
     )
 
     target_link_libraries(boids PRIVATE volk glm glfw spdlog::spdlog imgui)

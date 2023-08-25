@@ -1,6 +1,8 @@
 #include "grid.hpp"
 #include "constants.hpp"
 #include "shaders/shaders.h"
+#include "cleanup.hpp"
+#include "setup.hpp"
 
 #include <cassert>
 #include <array>
@@ -118,32 +120,28 @@ namespace grid
         .blendConstants = {0.f, 0.f, 0.f, 0.f}
     };
 
-    auto shader_stages = std::array{
-        VkPipelineShaderStageCreateInfo{
-            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-            .pNext = nullptr,
-            .flags = 0,
-            .stage = VK_SHADER_STAGE_VERTEX_BIT,
-            .module = 0,
-            .pName = shader_entry_point.data(),
-            .pSpecializationInfo = nullptr
-        },
-        VkPipelineShaderStageCreateInfo{
-            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-            .pNext = nullptr,
-            .flags = 0,
-            .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
-            .module = 0,
-            .pName = shader_entry_point.data(),
-            .pSpecializationInfo = nullptr
-        }
-    };
-
-    VkGraphicsPipelineCreateInfo get_pipeline_create_info(VkDevice logical_device, const std::vector<VkShaderModule>& shaders, VkPipelineLayout pipeline_layout, VkRenderPass render_pass, const VkExtent2D& window_extent)
+    VkGraphicsPipelineCreateInfo get_pipeline_create_info(VkDevice logical_device, VkPipelineLayout pipeline_layout, VkRenderPass render_pass, const VkExtent2D& window_extent, shaders::module_cache& shaders_cache)
     {
-        assert(shaders.size() == shader_stages.size());
-        for (std::size_t i = 0; i < shaders.size(); ++i)
-            shader_stages[i].module = shaders[i];
+        static const auto shader_stages = std::array{
+            VkPipelineShaderStageCreateInfo{
+                .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                .pNext = nullptr,
+                .flags = 0,
+                .stage = VK_SHADER_STAGE_VERTEX_BIT,
+                .module = shaders_cache.get_module(shader_path::vertex::grid),
+                .pName = shader_entry_point.data(),
+                .pSpecializationInfo = nullptr
+            },
+            VkPipelineShaderStageCreateInfo{
+                .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                .pNext = nullptr,
+                .flags = 0,
+                .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
+                .module = shaders_cache.get_module(shader_path::fragment::grid),
+                .pName = shader_entry_point.data(),
+                .pSpecializationInfo = nullptr
+            }
+        };
 
         viewport.width = window_extent.width;
         viewport.height = window_extent.height;

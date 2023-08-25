@@ -9,6 +9,8 @@
 #include "constants.hpp"
 #include "grid.hpp"
 #include "gui.hpp"
+#include "shader_module_cache.hpp"
+#include "constants.hpp"
 
 #include <glm/glm.hpp>
 #include <spdlog/spdlog.h>
@@ -143,22 +145,16 @@ void handle_keyboard(GLFWwindow* window, camera& camera)
     }
 }
 
-auto recreate_graphics_pipeline_and_swapchain(GLFWwindow* window, VkDevice logical_device, VkPhysicalDevice physical_device, const std::vector<std::vector<VkShaderModule>>& shader_modules, VkPipelineLayout pipeline_layout, VkRenderPass render_pass, VkSurfaceKHR surface, uint32_t queue_family_index, VkFormat swapchain_format, cleanup::queue_type& cleanup_queue)
+auto recreate_graphics_pipeline_and_swapchain(GLFWwindow* window, VkDevice logical_device, VkPhysicalDevice physical_device, shaders::module_cache& shaders_cache, VkPipelineLayout pipeline_layout, VkRenderPass render_pass, VkSurfaceKHR surface, uint32_t queue_family_index, VkFormat swapchain_format, cleanup::queue_type& cleanup_queue)
 {
     const auto window_extent = window::get_extent(window);
     spdlog::info("New extent: {}, {}", window_extent.width, window_extent.height);
 
-    assert(shader_modules.size() == 4);
-    const auto& cone_shaders = shader_modules[0];
-    const auto& grid_shaders = shader_modules[1];
-    const auto& aquarium_shaders = shader_modules[2];
-    const auto& debug_cube_shaders = shader_modules[3];
-
     auto graphics_pipelines = create_graphics_pipelines(logical_device, {
-        cone::get_pipeline_create_info(logical_device, cone_shaders, pipeline_layout, render_pass, window_extent),
-        grid::get_pipeline_create_info(logical_device, grid_shaders, pipeline_layout, render_pass, window_extent),
-        aquarium::get_pipeline_create_info(logical_device, aquarium_shaders, pipeline_layout, render_pass, window_extent),
-        light::get_pipeline_create_info(logical_device, debug_cube_shaders, pipeline_layout, render_pass, window_extent),
+        cone::get_pipeline_create_info(logical_device, pipeline_layout, render_pass, window_extent, shaders_cache),
+        grid::get_pipeline_create_info(logical_device, pipeline_layout, render_pass, window_extent, shaders_cache),
+        aquarium::get_pipeline_create_info(logical_device, pipeline_layout, render_pass, window_extent, shaders_cache),
+        light::get_pipeline_create_info(logical_device, pipeline_layout, render_pass, window_extent, shaders_cache),
     }, cleanup_queue);
     const auto& [swapchain, surface_format] = create_swapchain(logical_device, physical_device, surface, queue_family_index, window_extent, cleanup_queue);
     const auto& [swapchain_images, swapchain_image_views] = get_swapchain_images(logical_device, swapchain, surface_format.format, cleanup_queue);
@@ -212,16 +208,15 @@ int main()
     const auto render_pass = create_render_pass(logical_device, surface_format.format, depth_format, msaa_samples, general_queue);
     const auto descriptor_set_layout = create_descriptor_sets_layouts(logical_device, general_queue);
     const auto pipeline_layout = create_pipeline_layout(logical_device, { descriptor_set_layout }, general_queue);
-    const auto cone_shaders = load_shaders(logical_device, { shader_path::vertex::triangle, shader_path::fragment::triangle }, general_queue);
-    const auto grid_shaders = load_shaders(logical_device, { shader_path::vertex::grid, shader_path::fragment::grid }, general_queue);
-    const auto aquarium_shaders = load_shaders(logical_device, { shader_path::vertex::aquarium, shader_path::fragment::aquarium }, general_queue);
-    const auto debug_cube_shaders = load_shaders(logical_device, { shader_path::vertex::cube, shader_path::fragment::cube }, general_queue);
+
+    auto shader_cache = shaders::module_cache(logical_device);
+    general_queue.push([&shader_cache]() { shader_cache.clear(); });
 
     auto graphics_pipelines = create_graphics_pipelines(logical_device, {
-        cone::get_pipeline_create_info(logical_device, cone_shaders, pipeline_layout, render_pass, window_extent),
-        grid::get_pipeline_create_info(logical_device, grid_shaders, pipeline_layout, render_pass, window_extent),
-        aquarium::get_pipeline_create_info(logical_device, aquarium_shaders, pipeline_layout, render_pass, window_extent),
-        light::get_pipeline_create_info(logical_device, debug_cube_shaders, pipeline_layout, render_pass, window_extent),
+        cone::get_pipeline_create_info(logical_device, pipeline_layout, render_pass, window_extent, shader_cache),
+        grid::get_pipeline_create_info(logical_device, pipeline_layout, render_pass, window_extent, shader_cache),
+        aquarium::get_pipeline_create_info(logical_device, pipeline_layout, render_pass, window_extent, shader_cache),
+        light::get_pipeline_create_info(logical_device, pipeline_layout, render_pass, window_extent, shader_cache),
     }, swapchain_queue);
 
     auto& cone_pipeline = graphics_pipelines[0];
@@ -334,7 +329,7 @@ int main()
                 spdlog::info("Destroy swapchain objects.");
                 cleanup::flush(swapchain_queue);
 
-                std::tie(graphics_pipelines, window_extent, swapchain, surface_format, swapchain_images, swapchain_image_views, swapchain_framebuffers, color_image, color_image_memory, color_image_view, depth_image, depth_image_view, depth_image_memory) = recreate_graphics_pipeline_and_swapchain(window, logical_device, physical_device, { cone_shaders, grid_shaders, aquarium_shaders, debug_cube_shaders }, pipeline_layout, render_pass, surface, queue_family_index, surface_format.format, swapchain_queue);
+                std::tie(graphics_pipelines, window_extent, swapchain, surface_format, swapchain_images, swapchain_image_views, swapchain_framebuffers, color_image, color_image_memory, color_image_view, depth_image, depth_image_view, depth_image_memory) = recreate_graphics_pipeline_and_swapchain(window, logical_device, physical_device, shader_cache, pipeline_layout, render_pass, surface, queue_family_index, surface_format.format, swapchain_queue);
                 cone_pipeline = graphics_pipelines[0];
                 grid_pipeline = graphics_pipelines[1];
                 aquarium_pipeline = graphics_pipelines[2];

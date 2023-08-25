@@ -471,24 +471,6 @@ std::tuple<std::vector<VkImage>, std::vector<VkImageView>> get_swapchain_images(
     return std::tuple{images, image_views};
 }
 
-VkShaderModule create_shader_module(VkDevice logical_device, const std::vector<uint8_t>& code, cleanup::queue_type& cleanup_queue)
-{
-    const auto create_info = VkShaderModuleCreateInfo{
-        .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
-        .pNext = nullptr,
-        .flags = 0,
-        .codeSize = code.size(),
-        .pCode = reinterpret_cast<const uint32_t*>(code.data())
-    };
-
-    auto shader_module = VkShaderModule{};
-    VK_CHECK(vkCreateShaderModule(logical_device, &create_info, nullptr, &shader_module));
-
-    cleanup_queue.push([logical_device, shader_module]() { vkDestroyShaderModule(logical_device, shader_module, nullptr); });
-
-    return shader_module;
-}
-
 VkRenderPass create_render_pass(VkDevice logical_device, VkFormat swapchain_format, VkFormat depth_format, VkSampleCountFlagBits samples, cleanup::queue_type& cleanup_queue)
 {
     const auto color_attachment = VkAttachmentDescription{
@@ -821,7 +803,7 @@ std::tuple<VkImage, VkMemoryRequirements> create_color_image(VkDevice logical_de
 
 std::tuple<VkImage, VkImageView, VkDeviceMemory> create_color_image(VkDevice logical_device, VkPhysicalDevice physical_device, VkFormat swapchain_format, VkExtent2D swapchain_extent, cleanup::queue_type& cleanup_queue)
 {
-    const auto [image, memory_requirements] = create_color_image(logical_device, swapchain_format, swapchain_extent, cleanup_queue);
+    const auto& [image, memory_requirements] = create_color_image(logical_device, swapchain_format, swapchain_extent, cleanup_queue);
 
     const auto memory = allocate_memory(logical_device, memory_requirements.size, find_memory_type_index(physical_device, memory_requirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT), cleanup_queue);
     VK_CHECK(vkBindImageMemory(logical_device, image, memory, 0));
@@ -934,7 +916,7 @@ std::tuple<VkBuffer, VkMemoryRequirements> create_buffer(VkDevice logical_device
 
 std::tuple<VkBuffer, VkDeviceMemory> create_buffer(VkDevice logical_device, VkPhysicalDevice physical_device, std::size_t size, VkBufferUsageFlags usage, VkMemoryPropertyFlags memory_flags, cleanup::queue_type& cleanup_queue)
 {
-    const auto [buffer, memory_requirements] = create_buffer(logical_device, size, usage, cleanup_queue);
+    const auto& [buffer, memory_requirements] = create_buffer(logical_device, size, usage, cleanup_queue);
     const auto memory = allocate_memory(logical_device, memory_requirements.size, find_memory_type_index(physical_device, memory_requirements.memoryTypeBits, memory_flags), cleanup_queue);
 
     VK_CHECK(vkBindBufferMemory(logical_device, buffer, memory, 0));
@@ -1138,29 +1120,5 @@ std::size_t pad_uniform_buffer_size(std::size_t original_size, std::size_t min_u
     }
 
     return aligned_size;
-}
-
-std::vector<uint8_t> read_file(const std::string_view filename)
-{
-    spdlog::debug("Reading file: {}", filename);
-    auto file = std::ifstream(filename.data(), std::ios::binary);
-    if (!file.is_open())
-    {
-        spdlog::error("Could not open file {}", filename);
-        throw std::runtime_error("");
-    }
-    return std::vector<uint8_t>(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
-}
-
-std::vector<VkShaderModule> load_shaders(VkDevice logical_device, std::initializer_list<std::string_view> shader_paths, cleanup::queue_type& cleanup_queue)
-{
-    auto shader_modules = std::vector<VkShaderModule>();
-    shader_modules.reserve(shader_paths.size());
-    for (const auto shader_path : shader_paths)
-    {
-        shader_modules.push_back(create_shader_module(logical_device, read_file(shader_path), cleanup_queue));
-    }
-
-    return shader_modules;
 }
 

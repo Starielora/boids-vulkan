@@ -32,9 +32,6 @@ VkSurfaceFormatKHR choose_image_format(const std::vector<VkSurfaceFormatKHR>& av
 std::tuple<VkSwapchainKHR, VkSurfaceFormatKHR> create_swapchain(VkDevice logical_device, VkPhysicalDevice physical_device, VkSurfaceKHR surface, uint32_t queue_family_index, VkExtent2D glfw_framebuffer_extent, cleanup::queue_type& cleanup_queue);
 VkImageView create_color_image_view(VkDevice logical_device, VkFormat format, VkImage image, cleanup::queue_type& cleanup_queue);
 std::tuple<std::vector<VkImage>, std::vector<VkImageView>> get_swapchain_images(VkDevice logical_device, VkSwapchainKHR swapchain, VkFormat image_format, cleanup::queue_type& cleanup_queue);
-std::vector<uint8_t> read_file(const std::string_view filename);
-std::vector<VkShaderModule> load_shaders(VkDevice logical_device, std::initializer_list<std::string_view> shader_paths, cleanup::queue_type& cleanup_queue);
-VkShaderModule create_shader_module(VkDevice logical_device, const std::vector<uint8_t>& code, cleanup::queue_type& cleanup_queue);
 VkRenderPass create_render_pass(VkDevice logical_device, VkFormat swapchain_format, VkFormat depth_format, VkSampleCountFlagBits samples, cleanup::queue_type& cleanup_queue);
 VkPipelineLayout create_pipeline_layout(VkDevice logical_device, const std::vector<VkDescriptorSetLayout>& set_layouts, cleanup::queue_type& cleanup_queue);
 std::vector<VkPipeline> create_graphics_pipelines(VkDevice logical_device, const std::vector<VkGraphicsPipelineCreateInfo>& create_infos, cleanup::queue_type& cleanup_queue);
