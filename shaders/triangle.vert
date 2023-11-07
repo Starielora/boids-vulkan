@@ -13,7 +13,7 @@ layout(set = 0, binding = 0) uniform CameraData
     mat4 projview;
 } camera_data;
 
-struct ConeInstance
+struct boid
 {
     vec4 position;
     vec4 direction;
@@ -22,15 +22,15 @@ struct ConeInstance
     mat4 model_matrix;
 };
 
-layout(set = 0, binding = 1) readonly buffer ModelData
+layout(set = 0, binding = 1) readonly buffer boids_ssbo
 {
-    ConeInstance cones[];
-} model;
+    boid boids_in[];
+};
 
 void main() {
-    vec4 world_pos = model.cones[gl_InstanceIndex].model_matrix * vec4(pos, 1.0);
+    vec4 world_pos = boids_in[gl_InstanceIndex].model_matrix * vec4(pos, 1.0);
     gl_Position = camera_data.projview * world_pos;
-    object_color = model.cones[gl_InstanceIndex].color;
-    out_normal = normalize(mat3(transpose(inverse(model.cones[gl_InstanceIndex].model_matrix))) * normal);
+    object_color = boids_in[gl_InstanceIndex].color;
+    out_normal = normalize(mat3(transpose(inverse(boids_in[gl_InstanceIndex].model_matrix))) * normal);
     out_world_pos = world_pos.xyz;
 }
