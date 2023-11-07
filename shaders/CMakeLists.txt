@@ -6,7 +6,7 @@ macro(append_shader_path variable)
 endmacro()
 
 macro(add_shader)
-    set(options VERTEX FRAGMENT)
+    set(options VERTEX FRAGMENT COMPUTE)
     set(oneValueArgs INPUT_FILE OUTPUT_FILE VARIABLE_NAME_HEADER)
     cmake_parse_arguments(SHADER "${options}" "${oneValueArgs}" "" ${ARGN})
 
@@ -21,6 +21,8 @@ macro(add_shader)
         append_shader_path(vertex_shaders)
     elseif(SHADER_FRAGMENT)
         append_shader_path(fragment_shaders)
+    elseif(SHADER_COMPUTE)
+        append_shader_path(compute_shaders)
     else()
         message(FATAL_ERROR "Unknown shader type: ${SHADER_TYPE}")
     endif()
@@ -33,6 +35,7 @@ project(shaders)
 
     set(vertex_shaders "")
     set(fragment_shaders "")
+    set(compute_shaders "")
     set(target_depends "")
     set(target_sources "")
 
@@ -84,6 +87,12 @@ project(shaders)
         VARIABLE_NAME_HEADER cube
     )
 
+    add_shader(COMPUTE
+        INPUT_FILE update.comp
+        OUTPUT_FILE update.comp.spv
+        VARIABLE_NAME_HEADER update
+    )
+
     set(shaders_header_contents
 "#pragma once
 
@@ -95,6 +104,9 @@ namespace shader_path::vertex {${vertex_shaders}
 }
 
 namespace shader_path::fragment {${fragment_shaders}
+}
+
+namespace shader_path::compute {${compute_shaders}
 }
 ")
     file(GENERATE OUTPUT shaders.h CONTENT "${shaders_header_contents}")

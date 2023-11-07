@@ -35,6 +35,7 @@ std::tuple<std::vector<VkImage>, std::vector<VkImageView>> get_swapchain_images(
 VkRenderPass create_render_pass(VkDevice logical_device, VkFormat swapchain_format, VkFormat depth_format, VkSampleCountFlagBits samples, cleanup::queue_type& cleanup_queue);
 VkPipelineLayout create_pipeline_layout(VkDevice logical_device, const std::vector<VkDescriptorSetLayout>& set_layouts, cleanup::queue_type& cleanup_queue);
 std::vector<VkPipeline> create_graphics_pipelines(VkDevice logical_device, const std::vector<VkGraphicsPipelineCreateInfo>& create_infos, cleanup::queue_type& cleanup_queue);
+VkPipeline create_boids_update_compute_pipeline(VkDevice logical_device, const VkComputePipelineCreateInfo& create_info, cleanup::queue_type& cleanup_queue);
 std::vector<VkFramebuffer> create_swapchain_framebuffers(VkDevice logical_device, VkRenderPass render_pass, const std::vector<VkImageView>& color_imageviews, const std::vector<VkImageView>& swapchain_imageviews, const std::vector<VkImageView> depth_image_views, VkExtent2D swapchain_extent, cleanup::queue_type& cleanup_queue);
 VkCommandPool create_command_pool(VkDevice logical_device, uint32_t queue_family_index, cleanup::queue_type& cleanup_queue);
 std::vector<VkCommandBuffer> create_command_buffers(VkDevice logical_device, VkCommandPool command_pool, uint32_t count, cleanup::queue_type& cleanup_queue);

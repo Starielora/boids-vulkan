@@ -11,6 +11,7 @@
 #include "gui.hpp"
 #include "shader_module_cache.hpp"
 #include "constants.hpp"
+#include "boids_update.hpp"
 
 #include <glm/glm.hpp>
 #include <spdlog/spdlog.h>
@@ -198,7 +199,7 @@ int main()
     const auto surface = window::create_vk_surface(vk_instance, window, general_queue);
 
     const auto& [physical_device, queue_family_index, physical_device_properties] = pick_physical_device(vk_instance, surface, required_device_extensions);
-    const auto& [logical_device, present_queue] = create_logical_device(physical_device, queue_family_index, required_device_extensions, general_queue);
+    const auto& [logical_device, present_graphics_compute_queue] = create_logical_device(physical_device, queue_family_index, required_device_extensions, general_queue);
 
     auto window_extent = window::get_extent(window);
 
@@ -207,17 +208,20 @@ int main()
 
     const auto render_pass = create_render_pass(logical_device, surface_format.format, depth_format, msaa_samples, general_queue);
     const auto descriptor_set_layout = create_descriptor_sets_layouts(logical_device, general_queue);
-    const auto pipeline_layout = create_pipeline_layout(logical_device, { descriptor_set_layout }, general_queue);
+    const auto graphics_pipeline_layout = create_pipeline_layout(logical_device, { descriptor_set_layout }, general_queue);
+    const auto compute_pipeline_layout = boids_update::get_pipeline_layout(logical_device, general_queue);
 
     auto shader_cache = shaders::module_cache(logical_device);
     general_queue.push([&shader_cache]() { shader_cache.clear(); });
 
     auto graphics_pipelines = create_graphics_pipelines(logical_device, {
-        cone::get_pipeline_create_info(logical_device, pipeline_layout, render_pass, window_extent, shader_cache),
-        grid::get_pipeline_create_info(logical_device, pipeline_layout, render_pass, window_extent, shader_cache),
-        aquarium::get_pipeline_create_info(logical_device, pipeline_layout, render_pass, window_extent, shader_cache),
-        light::get_pipeline_create_info(logical_device, pipeline_layout, render_pass, window_extent, shader_cache),
+        cone::get_pipeline_create_info(logical_device, graphics_pipeline_layout, render_pass, window_extent, shader_cache),
+        grid::get_pipeline_create_info(logical_device, graphics_pipeline_layout, render_pass, window_extent, shader_cache),
+        aquarium::get_pipeline_create_info(logical_device, graphics_pipeline_layout, render_pass, window_extent, shader_cache),
+        light::get_pipeline_create_info(logical_device, graphics_pipeline_layout, render_pass, window_extent, shader_cache),
     }, swapchain_queue);
+
+    const auto boids_compute_pipeline = create_boids_update_compute_pipeline(logical_device, boids_update::get_pipeline_create_info(logical_device, compute_pipeline_layout, shader_cache), general_queue);
 
     auto& cone_pipeline = graphics_pipelines[0];
     auto& grid_pipeline = graphics_pipelines[1];
@@ -228,7 +232,7 @@ int main()
 
     const auto descriptor_pool = create_descriptor_pool(logical_device,  general_queue);
     const auto descriptor_sets = allocate_descriptor_sets(logical_device, { descriptor_set_layout }, descriptor_pool, overlapping_frames_count);
-    const auto descriptor_update_template = create_descriptor_update_template(logical_device, descriptor_set_layout, pipeline_layout, general_queue);
+    const auto descriptor_update_template = create_descriptor_update_template(logical_device, descriptor_set_layout, graphics_pipeline_layout, general_queue);
 
     struct
     {
@@ -287,7 +291,7 @@ int main()
     const auto rendering_finished_semaphores = create_semaphores(logical_device, overlapping_frames_count, general_queue);
     const auto overlapping_frames_fences = create_fences(logical_device, overlapping_frames_count, general_queue);
 
-    gui::init(window, vk_instance, logical_device, physical_device, queue_family_index, present_queue, overlapping_frames_count, render_pass, surface, surface_format, swapchain, command_pool, command_buffers[0], general_queue);
+    gui::init(window, vk_instance, logical_device, physical_device, queue_family_index, present_graphics_compute_queue, overlapping_frames_count, render_pass, surface, surface_format, swapchain, command_pool, command_buffers[0], general_queue);
 
     auto gui_data = gui::data_refs{
         .model_speed = model_speed,
@@ -327,7 +331,7 @@ int main()
                 spdlog::info("Destroy swapchain objects.");
                 cleanup::flush(swapchain_queue);
 
-                std::tie(graphics_pipelines, window_extent, swapchain, surface_format, swapchain_images, swapchain_image_views, swapchain_framebuffers, color_image, color_image_memory, color_image_view, depth_image, depth_image_view, depth_image_memory) = recreate_graphics_pipeline_and_swapchain(window, logical_device, physical_device, shader_cache, pipeline_layout, render_pass, surface, queue_family_index, surface_format.format, swapchain_queue);
+                std::tie(graphics_pipelines, window_extent, swapchain, surface_format, swapchain_images, swapchain_image_views, swapchain_framebuffers, color_image, color_image_memory, color_image_view, depth_image, depth_image_view, depth_image_memory) = recreate_graphics_pipeline_and_swapchain(window, logical_device, physical_device, shader_cache, graphics_pipeline_layout, render_pass, surface, queue_family_index, surface_format.format, swapchain_queue);
                 cone_pipeline = graphics_pipelines[0];
                 grid_pipeline = graphics_pipelines[1];
                 aquarium_pipeline = graphics_pipelines[2];
@@ -351,6 +355,9 @@ int main()
 
         VK_CHECK(vkResetCommandBuffer(command_buffer, 0));
         VK_CHECK(vkBeginCommandBuffer(command_buffer, &begin_info));
+
+        vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, boids_compute_pipeline);
+        vkCmdDispatch(command_buffer, 8, 1, 1);
 
         const auto clear_values = std::array{
             VkClearValue{
@@ -430,8 +437,8 @@ int main()
 
         vkCmdBeginRenderPass(command_buffer, &render_pass_begin_info, VK_SUBPASS_CONTENTS_INLINE);
 
-        vkCmdPushConstants(command_buffer, pipeline_layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(float), &aquarium::scale);
-        vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout, 0, 1, &descriptor_sets[current_frame], 0, nullptr);
+        vkCmdPushConstants(command_buffer, graphics_pipeline_layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(float), &aquarium::scale);
+        vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphics_pipeline_layout, 0, 1, &descriptor_sets[current_frame], 0, nullptr);
         vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, cone_pipeline);
         const auto offsets = std::array{ VkDeviceSize{ 0 } };
         vkCmdBindVertexBuffers(command_buffer, 0, 1, &vertex_buffer, offsets.data());
@@ -467,7 +474,7 @@ int main()
             .pSignalSemaphores = signal_semaphores.data(),
         };
 
-        VK_CHECK(vkQueueSubmit(present_queue, 1, &submit_info, fence));
+        VK_CHECK(vkQueueSubmit(present_graphics_compute_queue, 1, &submit_info, fence));
 
         const auto present_info = VkPresentInfoKHR{
             .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
@@ -480,7 +487,7 @@ int main()
             .pResults = nullptr,
         };
 
-        VK_CHECK(vkQueuePresentKHR(present_queue, &present_info));
+        VK_CHECK(vkQueuePresentKHR(present_graphics_compute_queue, &present_info));
 
         current_frame = (current_frame + 1) % overlapping_frames_count;
     }

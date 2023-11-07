@@ -61,6 +61,26 @@ namespace window
     }
 }
 
+constexpr auto debug_utils_messenger_create_info = VkDebugUtilsMessengerCreateInfoEXT{
+    .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT,
+    .pNext = nullptr,
+    .flags = 0,
+    .messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT,
+    .messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT,
+    .pfnUserCallback = &debug_callback,
+    .pUserData = nullptr
+};
+
+constexpr auto enabled_features = std::array{ VK_VALIDATION_FEATURE_ENABLE_DEBUG_PRINTF_EXT };
+const auto validation_features = VkValidationFeaturesEXT{
+    .sType = VK_STRUCTURE_TYPE_VALIDATION_FEATURES_EXT,
+    .pNext = &debug_utils_messenger_create_info,
+    .enabledValidationFeatureCount = enabled_features.size(),
+    .pEnabledValidationFeatures = enabled_features.data(),
+    .disabledValidationFeatureCount = 0,
+    .pDisabledValidationFeatures = nullptr
+};
+
 VkBool32 debug_callback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity, VkDebugUtilsMessageTypeFlagsEXT messageTypes, const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData, void* pUserData)
 {
     // TODO is there any message which has several types?
@@ -112,16 +132,6 @@ VkBool32 debug_callback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity, 
     return VK_FALSE;
 }
 
-constexpr auto debug_utils_messenger_create_info = VkDebugUtilsMessengerCreateInfoEXT{
-    .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT,
-    .pNext = nullptr,
-    .flags = 0,
-    .messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT,
-    .messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT,
-    .pfnUserCallback = &debug_callback,
-    .pUserData = nullptr
-};
-
 void create_debug_utils_messenger(VkInstance vk_instance, cleanup::queue_type& cleanup_queue)
 {
     auto debug_messenger = VkDebugUtilsMessengerEXT{ 0 };
@@ -150,7 +160,7 @@ VkInstance create_vulkan_instance(const std::vector<const char*>& layers, const 
 
     const auto create_info = VkInstanceCreateInfo{
         .sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
-        .pNext = &debug_utils_messenger_create_info,
+        .pNext = &validation_features,
         .flags = 0,
         .pApplicationInfo = &application_info,
         .enabledLayerCount = static_cast<uint32_t>(layers.size()),
@@ -617,6 +627,18 @@ std::vector<VkPipeline> create_graphics_pipelines(VkDevice logical_device, const
         }
     });
     return pipelines;
+}
+
+VkPipeline create_boids_update_compute_pipeline(VkDevice logical_device, const VkComputePipelineCreateInfo& create_info, cleanup::queue_type& cleanup_queue)
+{
+    auto pipeline = VkPipeline{};
+    VK_CHECK(vkCreateComputePipelines(logical_device, VK_NULL_HANDLE, 1, &create_info, nullptr, &pipeline));
+
+    cleanup_queue.push([logical_device, pipeline](){
+        vkDestroyPipeline(logical_device, pipeline, nullptr);
+    });
+
+    return pipeline;
 }
 
 std::vector<VkFramebuffer> create_swapchain_framebuffers(VkDevice logical_device, VkRenderPass render_pass, const std::vector<VkImageView>& color_imageviews, const std::vector<VkImageView>& swapchain_imageviews, const std::vector<VkImageView> depth_image_views, VkExtent2D swapchain_extent, cleanup::queue_type& cleanup_queue)
