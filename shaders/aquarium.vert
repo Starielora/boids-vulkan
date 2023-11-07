@@ -31,14 +31,6 @@ layout(set = 0, binding = 0) uniform CameraData
     mat4 projview;
 } camera_data;
 
-struct ConeInstance
-{
-    vec4 position;
-    vec4 direction;
-    vec4 color;
-    mat4 model_matrix;
-};
-
 void main()
 {
     gl_Position = camera_data.projview * vec4(push_constants.scale * pos[indices[gl_VertexIndex]], 1.0);

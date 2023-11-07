@@ -621,13 +621,12 @@ std::vector<VkPipeline> create_graphics_pipelines(VkDevice logical_device, const
 
 std::vector<VkFramebuffer> create_swapchain_framebuffers(VkDevice logical_device, VkRenderPass render_pass, const std::vector<VkImageView>& color_imageviews, const std::vector<VkImageView>& swapchain_imageviews, const std::vector<VkImageView> depth_image_views, VkExtent2D swapchain_extent, cleanup::queue_type& cleanup_queue)
 {
-    assert(swapchain_imageviews.size() == depth_image_views.size());
-
     auto framebuffers = std::vector<VkFramebuffer>(swapchain_imageviews.size());
 
     for (std::size_t i = 0; i < swapchain_imageviews.size(); ++i)
     {
-        const auto attachments = std::array{ color_imageviews[i], depth_image_views[i], swapchain_imageviews[i] };
+        // TODO this probably will bite me later, if color or depth are used for any read op
+        const auto attachments = std::array{ color_imageviews[0], depth_image_views[0], swapchain_imageviews[i] };
         const auto create_info = VkFramebufferCreateInfo{
             .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
             .pNext = nullptr,
