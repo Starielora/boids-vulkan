@@ -1,7 +1,12 @@
 #version 460
 
+#extension GL_GOOGLE_include_directive : enable
 #extension GL_EXT_debug_printf : require
+
+#include "descriptor_set0.glsl"
+
 void main()
 {
-    debugPrintfEXT("Hello world, thread %d\n", gl_GlobalInvocationID.x);
+    // debugPrintfEXT("Hello world, thread %d\n", gl_GlobalInvocationID.x);
+    boids_out[gl_GlobalInvocationID.x].model_matrix[3][0] += 0.01;
 }

@@ -106,7 +106,7 @@ VkBool32 debug_callback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity, 
     }();
 
     // TODO improve formatting
-    const auto message = fmt::format("{} ({}): {}", type, pCallbackData->pMessageIdName, pCallbackData->pMessage);
+    const auto message = pCallbackData->pMessageIdName != nullptr ? fmt::format("{} ({}): {}", type, pCallbackData->pMessageIdName, pCallbackData->pMessage) : fmt::format("{}: {}", type, pCallbackData->pMessage);
 
     // TODO this doesn't look too good
     if (messageSeverity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT)
@@ -618,7 +618,7 @@ VkPipelineLayout create_pipeline_layout(VkDevice logical_device, const std::vect
 std::vector<VkPipeline> create_graphics_pipelines(VkDevice logical_device, const std::vector<VkGraphicsPipelineCreateInfo>& create_infos, cleanup::queue_type& cleanup_queue)
 {
     auto pipelines = std::vector<VkPipeline>(create_infos.size());
-    vkCreateGraphicsPipelines(logical_device, VK_NULL_HANDLE, create_infos.size(), create_infos.data(), nullptr, pipelines.data());
+    VK_CHECK(vkCreateGraphicsPipelines(logical_device, VK_NULL_HANDLE, create_infos.size(), create_infos.data(), nullptr, pipelines.data()));
 
     cleanup_queue.push([logical_device, pipelines]() {
         for (const auto pipeline : pipelines)
@@ -970,7 +970,7 @@ VkDescriptorSetLayout create_descriptor_sets_layouts(VkDevice logical_device, cl
             .binding = 1,
             .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
             .descriptorCount = 1,
-            .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
+            .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_COMPUTE_BIT,
             .pImmutableSamplers = nullptr
         },
         VkDescriptorSetLayoutBinding{
@@ -985,6 +985,13 @@ VkDescriptorSetLayout create_descriptor_sets_layouts(VkDevice logical_device, cl
             .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
             .descriptorCount = 1,
             .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+            .pImmutableSamplers = nullptr
+        },
+        VkDescriptorSetLayoutBinding{
+            .binding = 4,
+            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .descriptorCount = 1,
+            .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_COMPUTE_BIT,
             .pImmutableSamplers = nullptr
         }
     };
@@ -1091,6 +1098,14 @@ VkDescriptorUpdateTemplate create_descriptor_update_template(VkDevice logical_de
             .descriptorCount = 1,
             .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
             .offset = 3*sizeof(VkDescriptorBufferInfo), // TODO lmao, fix this shit. It's an offset in pData array of vkCmdUpdateDescriptorSetWithTemplate
+            .stride = 0
+        },
+        VkDescriptorUpdateTemplateEntry {
+            .dstBinding = 4,
+            .dstArrayElement = 0,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .offset = 4*sizeof(VkDescriptorBufferInfo), // TODO lmao, fix this shit. It's an offset in pData array of vkCmdUpdateDescriptorSetWithTemplate
             .stride = 0
         },
     };

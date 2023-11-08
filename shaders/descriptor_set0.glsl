@@ -33,7 +33,7 @@ layout(set = 0, binding = 0) uniform CameraData
     mat4 projview;
 } camera_data;
 
-layout(set = 0, binding = 1) readonly buffer boids_ssbo
+layout(set = 0, binding = 1) readonly buffer boids_ssbo_in
 {
     boid boids_in[];
 };
@@ -46,4 +46,9 @@ layout(set = 0, binding = 2) readonly buffer DirLightsData
 layout(set = 0, binding = 3) readonly buffer PointLightsData
 {
     PointLight point_lights[];
+};
+
+layout(set = 0, binding = 4) writeonly buffer boids_ssbo_out
+{
+    boid boids_out[];
 };

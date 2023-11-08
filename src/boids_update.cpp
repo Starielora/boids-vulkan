@@ -4,14 +4,14 @@
 
 namespace boids_update
 {
-    VkPipelineLayout get_pipeline_layout(VkDevice logical_device, cleanup::queue_type& cleanup_queue)
+    VkPipelineLayout get_pipeline_layout(VkDevice logical_device, VkDescriptorSetLayout layout, cleanup::queue_type& cleanup_queue)
     {
         const auto pipeline_layout_create_info = VkPipelineLayoutCreateInfo{
              .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
              .pNext = nullptr,
              .flags = {},
-             .setLayoutCount = 0,
-             .pSetLayouts = nullptr,
+             .setLayoutCount = 1,
+             .pSetLayouts = &layout,
              .pushConstantRangeCount = 0,
              .pPushConstantRanges = nullptr
         };

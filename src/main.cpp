@@ -209,7 +209,7 @@ int main()
     const auto render_pass = create_render_pass(logical_device, surface_format.format, depth_format, msaa_samples, general_queue);
     const auto descriptor_set_layout = create_descriptor_sets_layouts(logical_device, general_queue);
     const auto graphics_pipeline_layout = create_pipeline_layout(logical_device, { descriptor_set_layout }, general_queue);
-    const auto compute_pipeline_layout = boids_update::get_pipeline_layout(logical_device, general_queue);
+    const auto compute_pipeline_layout = boids_update::get_pipeline_layout(logical_device, descriptor_set_layout, general_queue);
 
     auto shader_cache = shaders::module_cache(logical_device);
     general_queue.push([&shader_cache]() { shader_cache.clear(); });
@@ -240,7 +240,7 @@ int main()
         glm::mat4 viewproj;
     } camera_data;
 
-    constexpr auto instances_count = 1;
+    constexpr auto instances_count = 10;
     auto model_data = std::array<boids::boid, instances_count>();
     auto model_data_update_buffer = std::vector<boids::boid>(instances_count);
 
@@ -306,6 +306,37 @@ int main()
         .point_lights = lights.point_lights,
     };
 
+    model_data_update_buffer = std::vector(model_data_span.begin(), model_data_span.end());
+    for (std::size_t i = 0; i < instances_count; ++i)
+    {
+        auto& model = model_data[i];
+        auto velocity_update = boids::steer(i, model_data_update_buffer, visual_range, cohesion_weight, separation_weight, alignment_weight);
+        for (const auto& repellent : aquarium::wall_repellents)
+        {
+            velocity_update += glm::vec4(repellent.get_velocity_diff(model), 0);
+        }
+        model.velocity = model.direction;
+        model.velocity += velocity_update;
+        model.velocity *= model_speed;
+        if (glm::length(model.velocity))
+            model.direction = glm::normalize(model.velocity);
+        const auto& [collision, normal] = aquarium::check_collision(model.position + model.velocity, aquarium::min_range, aquarium::max_range);
+        if (collision)
+        {
+            model.direction = glm::vec4(glm::reflect(glm::vec3(model.direction), normal), 0.);
+        }
+        else
+        {
+            model.position += model.velocity;
+        }
+
+        model.model_matrix = glm::translate(glm::mat4(1.), glm::vec3(model.position));
+        model.model_matrix = model.model_matrix * glm::mat4(glm::rotation({0, 1, 0}, glm::normalize(glm::vec3(model.direction))));
+        model.model_matrix = glm::scale(model.model_matrix, model_scale * glm::vec3(0.5));
+    }
+    std::memcpy(reinterpret_cast<char*>(model_data_memory_ptr) + 0 * model_data_padded_size, &model_data, sizeof(model_data));
+    std::memcpy(reinterpret_cast<char*>(model_data_memory_ptr) + 1 * model_data_padded_size, &model_data, sizeof(model_data));
+
     spdlog::trace("Entering main loop.");
     auto current_frame = uint32_t{ 0 };
     auto image_index = uint32_t{ 0 };
@@ -356,9 +387,6 @@ int main()
         VK_CHECK(vkResetCommandBuffer(command_buffer, 0));
         VK_CHECK(vkBeginCommandBuffer(command_buffer, &begin_info));
 
-        vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, boids_compute_pipeline);
-        vkCmdDispatch(command_buffer, 8, 1, 1);
-
         const auto clear_values = std::array{
             VkClearValue{
                 .color = VkClearColorValue{
@@ -384,25 +412,25 @@ int main()
         //for (std::size_t i = 0; i < instances_count; ++i)
         //{
         //    auto& model = model_data[i];
-        //    //auto velocity_update = boids::steer(i, model_data_update_buffer, visual_range, cohesion_weight, separation_weight, alignment_weight);
-        //    //for (const auto& repellent : aquarium::wall_repellents)
-        //    //{
-        //    //    velocity_update += glm::vec4(repellent.get_velocity_diff(model), 0);
-        //    //}
-        //    //model.velocity = model.direction;
-        //    //model.velocity += velocity_update;
-        //    //model.velocity *= model_speed;
-        //    //if (glm::length(model.velocity))
-        //    //    model.direction = glm::normalize(model.velocity);
-        //    //const auto& [collision, normal] = aquarium::check_collision(model.position + model.velocity, aquarium::min_range, aquarium::max_range);
-        //    //if (collision)
-        //    //{
-        //    //    model.direction = glm::vec4(glm::reflect(glm::vec3(model.direction), normal), 0.);
-        //    //}
-        //    //else
-        //    //{
-        //    //    model.position += model.velocity;
-        //    //}
+        //    auto velocity_update = boids::steer(i, model_data_update_buffer, visual_range, cohesion_weight, separation_weight, alignment_weight);
+        //    for (const auto& repellent : aquarium::wall_repellents)
+        //    {
+        //        velocity_update += glm::vec4(repellent.get_velocity_diff(model), 0);
+        //    }
+        //    model.velocity = model.direction;
+        //    model.velocity += velocity_update;
+        //    model.velocity *= model_speed;
+        //    if (glm::length(model.velocity))
+        //        model.direction = glm::normalize(model.velocity);
+        //    const auto& [collision, normal] = aquarium::check_collision(model.position + model.velocity, aquarium::min_range, aquarium::max_range);
+        //    if (collision)
+        //    {
+        //        model.direction = glm::vec4(glm::reflect(glm::vec3(model.direction), normal), 0.);
+        //    }
+        //    else
+        //    {
+        //        model.position += model.velocity;
+        //    }
 
         //    model.model_matrix = glm::translate(glm::mat4(1.), glm::vec3(model.position));
         //    model.model_matrix = model.model_matrix * glm::mat4(glm::rotation({0, 1, 0}, glm::normalize(glm::vec3(model.direction))));
@@ -418,9 +446,14 @@ int main()
             camera_data_descriptor_buffer_infos[current_frame],
             model_data_descriptor_buffer_infos[current_frame],
             dir_lights_data_descriptor_buffer_infos[current_frame],
-            point_lights_data_descriptor_buffer_infos[current_frame]
+            point_lights_data_descriptor_buffer_infos[current_frame],
+            model_data_descriptor_buffer_infos[(current_frame + 1) % overlapping_frames_count],
         };
         vkUpdateDescriptorSetWithTemplate(logical_device, descriptor_sets[current_frame], descriptor_update_template, buffer_infos.data());
+
+        vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, boids_compute_pipeline);
+        vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, compute_pipeline_layout, 0, 1, &descriptor_sets[current_frame], 0, nullptr);
+        vkCmdDispatch(command_buffer, instances_count, 1, 1);
 
         const auto render_pass_begin_info = VkRenderPassBeginInfo{
             .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
