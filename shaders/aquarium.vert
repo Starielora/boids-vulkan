@@ -1,5 +1,9 @@
 #version 460 core
 
+#extension GL_GOOGLE_include_directive : enable
+
+#include "descriptor_set0.glsl"
+
 const vec3 pos[] = vec3[](
     vec3(-1.0,  0.0,  1.0),
     vec3( 1.0,  1.0,  1.0),
@@ -24,12 +28,6 @@ layout(push_constant) uniform constants
 {
     float scale;
 } push_constants;
-
-layout(set = 0, binding = 0) uniform CameraData
-{
-    vec4 position;
-    mat4 projview;
-} camera_data;
 
 void main()
 {
