@@ -5,8 +5,123 @@
 
 #include "descriptor_set0.glsl"
 
+float length2(vec4 v)
+{
+    return v.x * v.x + v.y * v.y + v.z * v.z;
+}
+
+float distance2(vec4 p1, vec4 p2)
+{
+    return length2(p2 - p1);
+}
+
+mat4 translate(mat4 model, vec3 translation)
+{
+    mat4 result = model;
+    result[3] = model[0] * translation.x + model[1] * translation.y + model[2] * translation.z + model[3];
+    return result;
+}
+
+mat4 scale(mat4 model, vec3 scale)
+{
+    mat4 result;
+    result[0] = model[0] * scale.x;
+    result[1] = model[1] * scale.y;
+    result[2] = model[2] * scale.z;
+    result[3] = model[3];
+    return result;
+}
+
+vec4 wall_repel(boid b, vec4 normal, float pos)
+{
+    const vec4 v = b.position - normal * b.position + pos * normal; // project boid onto plane
+    const float dist2 = distance2(b.position, v);
+
+    return normal / dist2;
+}
+
+vec4 wall_repel(boid b)
+{
+    vec4 front = vec4(0, 0, -1, 0);
+    vec4 back = vec4(0, 0, 1, 0);
+    vec4 top = vec4(0, -1, 0, 0);
+    vec4 bottom = vec4(0, 1, 0, 0);
+    vec4 left = vec4(1, 0, 0, 0);
+    vec4 right = vec4(-1, 0, 0, 0);
+
+    float wall_pos = 30.0f;
+
+    vec4 v = vec4(0.0);
+    v += wall_repel(b, front, wall_pos);
+    v += wall_repel(b, back, -wall_pos);
+    v += wall_repel(b, top, wall_pos);
+    v += wall_repel(b, bottom, 0.f);
+    v += wall_repel(b, left, -wall_pos);
+    v += wall_repel(b, right, wall_pos);
+
+    return v;
+}
+
+vec4 steer(uint index, float visual_range, float cohesion_weight, float separation_weight, float alignment_weight)
+{
+    const boid current_boid = boids_in[index];
+
+    uint observed_boids = 0;
+    vec4 avg_observable_cluster_position = vec4(0.);
+    vec4 separation = vec4(0.);
+    vec4 alignment = vec4(0.);
+
+    // yeah baby n^2 complexity lets goooo
+    for (uint i = 0; i < boids_in.length(); ++i)
+    {
+        if (i != index)
+        {
+            const boid b = boids_in[i];
+            const float dist = distance(current_boid.position, b.position);
+            if(dist < visual_range)
+            {
+                observed_boids++;
+                avg_observable_cluster_position += b.position;
+                separation += (current_boid.position - b.position) / abs(dist);
+                alignment += b.velocity;
+            }
+        }
+    }
+
+    if (observed_boids > 0)
+    {
+        avg_observable_cluster_position /= observed_boids;
+        alignment /= observed_boids;
+        const vec4 total_cohesion = (avg_observable_cluster_position - current_boid.position) * cohesion_weight;
+        const vec4 total_separation = separation * separation_weight;
+        const vec4 total_alignment = alignment * alignment_weight;
+        return total_cohesion + total_separation + total_alignment;
+    }
+    else
+    {
+        return vec4(0.);
+    }
+}
+
 void main()
 {
-    // debugPrintfEXT("Hello world, thread %d\n", gl_GlobalInvocationID.x);
-    boids_out[gl_GlobalInvocationID.x].model_matrix[3][0] += 0.01;
+    const float boid_scale = 0.1;
+    boid model = boids_in[gl_GlobalInvocationID.x];
+
+    model.velocity = model.direction;
+    model.velocity += steer(gl_GlobalInvocationID.x, 10., 0.5, 0.01, 0.3);
+    model.velocity += wall_repel(model); // forces
+    model.velocity *= 0.1; // push_constant maybe?
+    if (length(model.velocity) > 0.f)
+        model.direction = normalize(model.velocity);
+
+    model.position += model.velocity;
+
+    mat4 model_matrix = mat4(1.0);
+    model_matrix = translate(model_matrix, model.position.xyz);
+    // TODO rotate()
+    model_matrix = scale(model_matrix, vec3(boid_scale, boid_scale, boid_scale));
+    model.model_matrix = model_matrix;
+
+    boids_out[gl_GlobalInvocationID.x] = model;
 }
