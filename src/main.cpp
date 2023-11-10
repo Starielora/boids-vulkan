@@ -294,6 +294,7 @@ int main()
     gui::init(window, vk_instance, logical_device, physical_device, queue_family_index, present_graphics_compute_queue, overlapping_frames_count, render_pass, surface, surface_format, swapchain, command_pool, command_buffers[0], general_queue);
 
     auto gui_data = gui::data_refs{
+        .model_scale = model_scale.x,
         .model_speed = model_speed,
         .camera = g_camera,
         .cohesion_weight = cohesion_weight,
@@ -394,6 +395,8 @@ int main()
 
         vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, boids_compute_pipeline);
         vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, compute_pipeline_layout, 0, 1, &descriptor_sets[current_frame], 0, nullptr);
+        const auto push_constants = std::array<float, 7>{ gui_data.model_scale, gui_data.model_speed, aquarium::scale, gui_data.visual_range, gui_data.cohesion_weight, gui_data.separation_weight, gui_data.alignment_weight };
+        vkCmdPushConstants(command_buffer, compute_pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(decltype(push_constants)::value_type) * push_constants.size(), push_constants.data());
         vkCmdDispatch(command_buffer, instances_count, 1, 1);
 
         const auto render_pass_begin_info = VkRenderPassBeginInfo{

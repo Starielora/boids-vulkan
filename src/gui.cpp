@@ -116,6 +116,7 @@ namespace gui
         ImGui::NewFrame();
 
         auto& [
+            model_scale,
             model_speed,
             camera,
             cohesion_weight,
@@ -142,6 +143,8 @@ namespace gui
         ImGui::Text(fmt::format(aligned_vectors_format, "right:", right_str).c_str());
 
         ImGui::Text("Boids params");
+        ImGui::Separator();
+        ImGui::DragFloat("Scale", &model_scale, 0.01, 0.01f, 1.f);
         ImGui::Separator();
         ImGui::DragFloat("Speed", &model_speed, 0.001, -1.f, 1.f);
         ImGui::Separator();

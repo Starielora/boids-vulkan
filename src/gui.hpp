@@ -15,6 +15,7 @@ namespace gui
 {
     struct data_refs
     {
+        float& model_scale;
         float& model_speed;
         camera& camera;
         float& cohesion_weight;

@@ -6,14 +6,20 @@ namespace boids_update
 {
     VkPipelineLayout get_pipeline_layout(VkDevice logical_device, VkDescriptorSetLayout layout, cleanup::queue_type& cleanup_queue)
     {
+        const auto push_constant_range = VkPushConstantRange{
+            .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
+            .offset = 0,
+            .size = 7 * sizeof(float)
+        };
+
         const auto pipeline_layout_create_info = VkPipelineLayoutCreateInfo{
              .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
              .pNext = nullptr,
              .flags = {},
              .setLayoutCount = 1,
              .pSetLayouts = &layout,
-             .pushConstantRangeCount = 0,
-             .pPushConstantRanges = nullptr
+             .pushConstantRangeCount = 1,
+             .pPushConstantRanges = &push_constant_range
         };
 
         auto pipeline_layout = VkPipelineLayout{};

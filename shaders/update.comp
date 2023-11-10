@@ -40,7 +40,7 @@ vec4 wall_repel(boid b, vec4 normal, float pos)
     return normal / dist2;
 }
 
-vec4 wall_repel(boid b)
+vec4 wall_repel(boid b, float wall_pos)
 {
     vec4 front = vec4(0, 0, -1, 0);
     vec4 back = vec4(0, 0, 1, 0);
@@ -48,8 +48,6 @@ vec4 wall_repel(boid b)
     vec4 bottom = vec4(0, 1, 0, 0);
     vec4 left = vec4(1, 0, 0, 0);
     vec4 right = vec4(-1, 0, 0, 0);
-
-    float wall_pos = 30.0f;
 
     vec4 v = vec4(0.0);
     v += wall_repel(b, front, wall_pos);
@@ -103,15 +101,26 @@ vec4 steer(uint index, float visual_range, float cohesion_weight, float separati
     }
 }
 
+layout(push_constant) uniform constants
+{
+    float boid_scale;
+    float speed;
+    float aquarium_cube_size;
+    float visual_range;
+    float cohesion_weight;
+    float separation_weight;
+    float alignment_weight;
+} push_constants;
+
 void main()
 {
-    const float boid_scale = 0.1;
+    const float boid_scale = push_constants.boid_scale;
     boid model = boids_in[gl_GlobalInvocationID.x];
 
     model.velocity = model.direction;
-    model.velocity += steer(gl_GlobalInvocationID.x, 10., 0.5, 0.01, 0.3);
-    model.velocity += wall_repel(model); // forces
-    model.velocity *= 0.1; // push_constant maybe?
+    model.velocity += steer(gl_GlobalInvocationID.x, push_constants.visual_range, push_constants.cohesion_weight, push_constants.separation_weight, push_constants.alignment_weight);
+    model.velocity += wall_repel(model, push_constants.aquarium_cube_size); // forces
+    model.velocity *= push_constants.speed;
     if (length(model.velocity) > 0.f)
         model.direction = normalize(model.velocity);
 
