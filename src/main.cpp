@@ -240,9 +240,8 @@ int main()
         glm::mat4 viewproj;
     } camera_data;
 
-    constexpr auto instances_count = 5000;
+    constexpr auto instances_count = 10000;
     auto model_data = std::vector<boids::boid>(instances_count);
-    auto model_data_update_buffer = std::vector<boids::boid>(instances_count);
 
     auto model_data_span = std::span(model_data.data(), model_data.data() + instances_count);
     cone::generate_model_data(model_data_span, aquarium::min_range, aquarium::max_range);
@@ -395,7 +394,7 @@ int main()
 
         vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, boids_compute_pipeline);
         vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, compute_pipeline_layout, 0, 1, &descriptor_sets[current_frame], 0, nullptr);
-        const auto push_constants = std::array<float, 7>{ gui_data.model_scale, gui_data.model_speed, aquarium::scale, gui_data.visual_range, gui_data.cohesion_weight, gui_data.separation_weight, gui_data.alignment_weight };
+        const auto push_constants = std::array<float, 8>{ gui_data.model_scale, gui_data.model_speed, aquarium::scale, gui_data.visual_range, gui_data.cohesion_weight, gui_data.separation_weight, gui_data.alignment_weight, 0.f };
         vkCmdPushConstants(command_buffer, compute_pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(decltype(push_constants)::value_type) * push_constants.size(), push_constants.data());
         vkCmdDispatch(command_buffer, instances_count, 1, 1);
 

@@ -9,7 +9,7 @@ namespace boids_update
         const auto push_constant_range = VkPushConstantRange{
             .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
             .offset = 0,
-            .size = 7 * sizeof(float)
+            .size = 12 * sizeof(float)
         };
 
         const auto pipeline_layout_create_info = VkPipelineLayoutCreateInfo{
