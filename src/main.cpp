@@ -31,13 +31,13 @@ auto general_queue = cleanup::queue_type{};
 auto swapchain_queue = cleanup::queue_type{};
 
 auto visual_range = 1.f;
-auto cohesion_weight = 0.001f;
-auto separation_weight = 0.001f;
-auto alignment_weight = 0.001f;
+auto cohesion_weight = 0.025f;
+auto separation_weight = 0.005f;
+auto alignment_weight = 1.00f;
 auto wall_force_weight = 0.1f;
 
 auto model_speed = 0.1f;
-auto model_scale = glm::vec3(0.5, 0.5, 0.5);
+auto model_scale = glm::vec3(0.15, 0.15, 0.15);
 
 namespace aquarium
 {
@@ -373,7 +373,6 @@ int main()
             }
         };
 
-        // TODO flush buffer before descriptor set update?
         // update camera
         camera_data.position = glm::vec4(g_camera.position(), 0.f);
         camera_data.viewproj = flip_clip_space * g_camera.projection(window_extent.width, window_extent.height) * g_camera.view();
@@ -382,6 +381,11 @@ int main()
         // update lights
         std::memcpy(reinterpret_cast<char*>(dir_lights_data_memory_ptr) + current_frame * dir_lights_data_padded_size, lights.dir_lights.data(), lights.dir_lights.size() * sizeof(decltype(lights.dir_lights)::value_type));
         std::memcpy(reinterpret_cast<char*>(point_lights_data_memory_ptr) + current_frame * point_lights_data_padded_size, lights.point_lights.data(), lights.point_lights.size() * sizeof(decltype(lights.point_lights)::value_type));
+
+        // TODO performance :(
+        {
+            std::memcpy(model_data.data(), (reinterpret_cast<char*>(model_data_memory_ptr) + current_frame * model_data_padded_size), model_data_padded_size);
+        }
 
         const auto buffer_infos = std::array{
             camera_data_descriptor_buffer_infos[current_frame],
@@ -394,8 +398,8 @@ int main()
 
         vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, boids_compute_pipeline);
         vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, compute_pipeline_layout, 0, 1, &descriptor_sets[current_frame], 0, nullptr);
-        const auto push_constants = std::array<float, 8>{ gui_data.model_scale, gui_data.model_speed, aquarium::scale, gui_data.visual_range, gui_data.cohesion_weight, gui_data.separation_weight, gui_data.alignment_weight, 0.f };
-        vkCmdPushConstants(command_buffer, compute_pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(decltype(push_constants)::value_type) * push_constants.size(), push_constants.data());
+        const auto compute_push_constants = std::array<float, 8>{ gui_data.model_scale, gui_data.model_speed, aquarium::scale, gui_data.visual_range, gui_data.cohesion_weight, gui_data.separation_weight, gui_data.alignment_weight, 0.f };
+        vkCmdPushConstants(command_buffer, compute_pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(decltype(compute_push_constants)::value_type) * compute_push_constants.size(), compute_push_constants.data());
         vkCmdDispatch(command_buffer, instances_count, 1, 1);
 
         const auto render_pass_begin_info = VkRenderPassBeginInfo{
