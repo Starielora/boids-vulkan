@@ -126,9 +126,12 @@ namespace gui
             wall_force_weight,
             cones,
             dir_lights,
-            point_lights
+            point_lights,
+            fps
         ] = data;
 
+        ImGui::Text("FPS");
+        ImGui::PlotLines("fps", fps.data(), fps.size());
         ImGui::Text("Camera");
         static constexpr auto vec3_format = FMT_COMPILE("({: .2f}, {: .2f}, {: .2f})");
         static constexpr auto vec4_format = FMT_COMPILE("({: .2f}, {: .2f}, {: .2f}, {: .2f})");

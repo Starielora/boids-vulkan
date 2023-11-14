@@ -19,6 +19,7 @@
 
 #include <vector>
 #include <array>
+#include <numeric>
 
 constexpr bool VALIDATION_LAYERS = true;
 
@@ -38,6 +39,9 @@ auto wall_force_weight = 0.1f;
 
 auto model_speed = 0.1f;
 auto model_scale = glm::vec3(0.15, 0.15, 0.15);
+
+auto fps = std::vector<float>(100);
+auto fps_index = 0u;
 
 namespace aquarium
 {
@@ -240,7 +244,7 @@ int main()
         glm::mat4 viewproj;
     } camera_data;
 
-    constexpr auto instances_count = 10000;
+    constexpr auto instances_count = 1000;
     auto model_data = std::vector<boids::boid>(instances_count);
 
     auto model_data_span = std::span(model_data.data(), model_data.data() + instances_count);
@@ -304,6 +308,7 @@ int main()
         .cones = model_data_span,
         .dir_lights = lights.dir_lights,
         .point_lights = lights.point_lights,
+        .fps = fps,
     };
 
     std::memcpy(reinterpret_cast<char*>(model_data_memory_ptr) + 0 * model_data_padded_size, model_data.data(), model_data.size() * sizeof(decltype(model_data)::value_type));
@@ -314,6 +319,7 @@ int main()
     auto image_index = uint32_t{ 0 };
     while (!glfwWindowShouldClose(window))
     {
+        const auto t1 = std::chrono::steady_clock::now();
         glfwPollEvents();
         handle_keyboard(window, g_camera);
 
@@ -384,7 +390,7 @@ int main()
 
         // TODO performance :(
         {
-            std::memcpy(model_data.data(), (reinterpret_cast<char*>(model_data_memory_ptr) + current_frame * model_data_padded_size), model_data_padded_size);
+            //std::memcpy(model_data.data(), (reinterpret_cast<char*>(model_data_memory_ptr) + current_frame * model_data_padded_size), model_data_padded_size);
         }
 
         const auto buffer_infos = std::array{
@@ -470,6 +476,11 @@ int main()
         VK_CHECK(vkQueuePresentKHR(present_graphics_compute_queue, &present_info));
 
         current_frame = (current_frame + 1) % overlapping_frames_count;
+
+        const auto t2 = std::chrono::steady_clock::now();
+        fps[fps_index++ % fps.size()] = 1000.f / std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count();
+        const auto avg = std::accumulate(fps.begin(), fps.end(), 0) / fps.size();
+        glfwSetWindowTitle(window, fmt::format("boids ({} fps)", avg).c_str());
     }
 
     VK_CHECK(vkDeviceWaitIdle(logical_device));

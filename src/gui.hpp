@@ -26,6 +26,7 @@ namespace gui
         std::span<boids::boid>& cones;
         std::vector<directional_light>& dir_lights;
         std::vector<point_light>& point_lights;
+        std::vector<float>& fps;
     };
 
     VkDescriptorPool create_descriptor_pool(VkDevice logical_device, cleanup::queue_type& cleanup_queue);
