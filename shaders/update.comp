@@ -150,4 +150,6 @@ void main()
     model.model_matrix = model_matrix;
 
     boids_out[gl_GlobalInvocationID.x] = model;
+
+    imageStore(grid_buffer, ivec2(0,0), uvec4(269,0,0,0));
 }

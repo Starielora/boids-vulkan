@@ -52,3 +52,5 @@ layout(set = 0, binding = 4) writeonly buffer boids_ssbo_out
 {
     boid boids_out[];
 };
+
+layout(set = 0, binding = 5, rgba32ui) uniform uimage2D grid_buffer;
