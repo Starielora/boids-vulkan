@@ -93,6 +93,12 @@ project(shaders)
         VARIABLE_NAME_HEADER update
     )
 
+    add_shader(COMPUTE
+        INPUT_FILE boids_to_cells.comp
+        OUTPUT_FILE boids_to_cells.comp.spv
+        VARIABLE_NAME_HEADER boids_to_cells
+    )
+
     set(shaders_header_contents
 "#pragma once
 

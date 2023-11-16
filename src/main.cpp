@@ -48,15 +48,15 @@ constexpr auto instances_count = 1000;
 namespace aquarium
 {
     constexpr float scale = 30.f;
-    const auto min_range = glm::vec3(-scale, 0.f, -scale);
-    const auto max_range = glm::vec3(scale, scale, scale);
+    const auto min_range = glm::vec4(-scale, 0.f, -scale, 0.f);
+    const auto max_range = glm::vec4(scale, scale, scale, 0.f);
 
     const auto wall_repellents = get_wall_repellents(min_range, max_range, wall_force_weight);
 }
 
 namespace optimization
 {
-    constexpr auto grid_cells_count = glm::vec3(2, 2, 2);
+    constexpr auto grid_cells_count = glm::uvec4(3, 3, 3, 0);
 
     auto create_grid_image(VkDevice logical_device, VkPhysicalDevice physical_device, VkCommandBuffer command_buffer, VkQueue queue, cleanup::queue_type& cleanup_queue)
     {
@@ -68,14 +68,14 @@ namespace optimization
             .format = VK_FORMAT_R32G32B32A32_UINT,
             .extent = VkExtent3D{
                 .width = instances_count,
-                .height = static_cast<uint32_t>(grid_cells_count.x * grid_cells_count.y * grid_cells_count.z),
+                .height = grid_cells_count.x * grid_cells_count.y * grid_cells_count.z,
                 .depth = 1
             },
             .mipLevels = 1,
             .arrayLayers = 1,
             .samples = VK_SAMPLE_COUNT_1_BIT,
             .tiling = VK_IMAGE_TILING_OPTIMAL,
-            .usage = VK_IMAGE_USAGE_STORAGE_BIT,
+            .usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, // transfer dst to be able to clear texture each frame
             .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
             .queueFamilyIndexCount = 0,
             .pQueueFamilyIndices = nullptr,
@@ -176,6 +176,59 @@ namespace optimization
         });
 
         return std::tuple{ image, image_view, memory };
+    }
+
+    auto create_boids_to_cells_pipeline(VkDevice logical_device, VkDescriptorSetLayout layout, shaders::module_cache& shaders_cache, cleanup::queue_type& cleanup_queue)
+    {
+        const auto push_constant_range = VkPushConstantRange{
+            .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
+            .offset = 0,
+            .size = sizeof(glm::vec4) + sizeof(glm::vec4) + sizeof(glm::uvec4)
+        };
+
+        const auto pipeline_layout_create_info = VkPipelineLayoutCreateInfo{
+             .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+             .pNext = nullptr,
+             .flags = {},
+             .setLayoutCount = 1,
+             .pSetLayouts = &layout,
+             .pushConstantRangeCount = 1,
+             .pPushConstantRanges = &push_constant_range
+        };
+
+        auto pipeline_layout = VkPipelineLayout{};
+        VK_CHECK(vkCreatePipelineLayout(logical_device, &pipeline_layout_create_info, nullptr, &pipeline_layout));
+
+        cleanup_queue.push([logical_device, pipeline_layout] {
+            vkDestroyPipelineLayout(logical_device, pipeline_layout, nullptr);
+        });
+
+        static const auto create_info = VkComputePipelineCreateInfo{
+            .sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = {},
+            .stage = VkPipelineShaderStageCreateInfo{
+                .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                .pNext = nullptr,
+                .flags = {},
+                .stage = VK_SHADER_STAGE_COMPUTE_BIT,
+                .module = shaders_cache.get_module(shader_path::compute::boids_to_cells),
+                .pName = "main",
+                .pSpecializationInfo = nullptr,
+            },
+            .layout = pipeline_layout,
+            .basePipelineHandle = VK_NULL_HANDLE,
+            .basePipelineIndex = 0
+        };
+
+        auto pipeline = VkPipeline{};
+        VK_CHECK(vkCreateComputePipelines(logical_device, VK_NULL_HANDLE, 1, &create_info, nullptr, &pipeline));
+
+        cleanup_queue.push([logical_device, pipeline](){
+            vkDestroyPipeline(logical_device, pipeline, nullptr);
+        });
+
+        return std::tuple{ pipeline, pipeline_layout };
     }
 }
 
@@ -354,6 +407,7 @@ int main()
     }, swapchain_queue);
 
     const auto boids_compute_pipeline = create_boids_update_compute_pipeline(logical_device, boids_update::get_pipeline_create_info(logical_device, compute_pipeline_layout, shader_cache), general_queue);
+    auto [boids_to_cells_pipeline, boids_to_cells_pipeline_layout] = optimization::create_boids_to_cells_pipeline(logical_device, descriptor_set_layout, shader_cache, general_queue);
 
     auto& cone_pipeline = graphics_pipelines[0];
     auto& grid_pipeline = graphics_pipelines[1];
@@ -550,11 +604,28 @@ int main()
             .pTexelBufferView = nullptr
         };
         vkUpdateDescriptorSets(logical_device, 1, &grid_image_write, 0, nullptr);
+        vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, boids_to_cells_pipeline);
+        vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, boids_to_cells_pipeline_layout, 0, 1, &descriptor_sets[current_frame], 0, nullptr);
+        vkCmdPushConstants(command_buffer, boids_to_cells_pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(aquarium::max_range), &aquarium::max_range[0]);
+        vkCmdPushConstants(command_buffer, boids_to_cells_pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, sizeof(aquarium::max_range), sizeof(aquarium::min_range), &aquarium::min_range[0]);
+        vkCmdPushConstants(command_buffer, boids_to_cells_pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, sizeof(aquarium::max_range) + sizeof(aquarium::min_range), sizeof(optimization::grid_cells_count), &optimization::grid_cells_count[0]);
+        vkCmdDispatch(command_buffer, instances_count, 1, 1);
+
         vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, boids_compute_pipeline);
         vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, compute_pipeline_layout, 0, 1, &descriptor_sets[current_frame], 0, nullptr);
         const auto compute_push_constants = std::array<float, 8>{ gui_data.model_scale, gui_data.model_speed, aquarium::scale, gui_data.visual_range, gui_data.cohesion_weight, gui_data.separation_weight, gui_data.alignment_weight, 0.f };
         vkCmdPushConstants(command_buffer, compute_pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(decltype(compute_push_constants)::value_type) * compute_push_constants.size(), compute_push_constants.data());
         vkCmdDispatch(command_buffer, instances_count, 1, 1);
+        const auto cells_buffer_clear_color = VkClearColorValue{};
+        const auto subresource_range = VkImageSubresourceRange{
+            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+            .baseMipLevel = 0,
+            .levelCount = 1,
+            .baseArrayLayer = 0,
+            .layerCount = 1
+        };
+        // clear util texture
+        vkCmdClearColorImage(command_buffer, grid_buffer_image, VK_IMAGE_LAYOUT_GENERAL, &cells_buffer_clear_color, 1, &subresource_range);
 
         const auto render_pass_begin_info = VkRenderPassBeginInfo{
             .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
