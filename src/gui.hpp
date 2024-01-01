@@ -5,7 +5,7 @@
 #include "light.hpp"
 #include "boids.hpp"
 
-#include <Volk/volk.h>
+#include <volk.h>
 #include <GLFW/glfw3.h>
 
 #include <array>

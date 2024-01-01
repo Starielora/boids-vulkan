@@ -1,7 +1,7 @@
 #include "shader_module_cache.hpp"
 #include "cleanup.hpp"
 
-#include <Volk/volk.h>
+#include <volk.h>
 
 namespace boids_update
 {

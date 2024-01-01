@@ -996,7 +996,7 @@ VkDescriptorSetLayout create_descriptor_sets_layouts(VkDevice logical_device, cl
         },
         VkDescriptorSetLayoutBinding{
             .binding = 5,
-            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
             .descriptorCount = 1,
             .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
             .pImmutableSamplers = nullptr
@@ -1113,6 +1113,14 @@ VkDescriptorUpdateTemplate create_descriptor_update_template(VkDevice logical_de
             .descriptorCount = 1,
             .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
             .offset = 4*sizeof(VkDescriptorBufferInfo), // TODO lmao, fix this shit. It's an offset in pData array of vkCmdUpdateDescriptorSetWithTemplate
+            .stride = 0
+        },
+        VkDescriptorUpdateTemplateEntry {
+            .dstBinding = 5,
+            .dstArrayElement = 0,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .offset = 5*sizeof(VkDescriptorBufferInfo), // TODO lmao, fix this shit. It's an offset in pData array of vkCmdUpdateDescriptorSetWithTemplate
             .stride = 0
         }
     };

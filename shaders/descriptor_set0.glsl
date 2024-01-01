@@ -53,4 +53,19 @@ layout(set = 0, binding = 4) writeonly buffer boids_ssbo_out
     boid boids_out[];
 };
 
-layout(set = 0, binding = 5, rgba32ui) uniform uimage2D grid_buffer;
+layout(set = 0, binding = 5) buffer cells_ssbo
+{
+    uvec4 cells[];
+};
+
+uint cell_index(uvec3 cell, uvec4 cells_max)
+{
+    return cell.z * cells_max.x * cells_max.y + cell.y * cells_max.x + cell.x;
+}
+
+uint index_in_buffer(uint boid_id, uint cell_id)
+{
+    // treat as 2D array, where first index is cell_id and second boid_id
+    return cell_id * boids_in.length() + boid_id;
+}
+

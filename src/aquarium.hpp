@@ -3,7 +3,7 @@
 #include "boids.hpp"
 #include "shader_module_cache.hpp"
 
-#include <Volk/volk.h>
+#include <volk.h>
 
 #include <tuple>
 #include <array>

@@ -1,0 +1,35 @@
+#version 460
+
+#extension GL_GOOGLE_include_directive : enable
+#extension GL_EXT_debug_printf : require
+
+#include "descriptor_set0.glsl"
+
+layout(push_constant) uniform constants
+{
+    vec4 aquarium_max;
+    vec4 aquarium_min;
+    uvec4 cells_max;
+};
+
+void main()
+{
+    const uint boid_id = gl_GlobalInvocationID.x;
+    boid b = boids_in[boid_id];
+
+    uvec3 cell = uvec3(floor(cells_max.xyz * ((b.position.xyz - aquarium_min.xyz) / (aquarium_max.xyz - aquarium_min.xyz))));
+
+    uint cell_id = cell_index(cell, cells_max);
+    if (cell_id > cells_max.x * cells_max.y * cells_max.z)
+    {
+        cell = uvec3(0, 0, 0); // fuck you collision system
+        cell_id = cell_index(cell, cells_max);
+//        debugPrintfEXT("position: %f, %f, %f", b.position.x, b.position.y, b.position.z);
+//        debugPrintfEXT("cell: %x, %x, %x", cell.x, cell.y, cell.z);
+    }
+    const uint buffer_id = index_in_buffer(boid_id, cell_id);
+
+    // flag that boid with this id is located in this cell
+    cells[buffer_id].x = 1;
+    cells[boid_id].a = cell_id; // TODO probably storing it this way is very bad for cache - maybe create a separate buffer for mapping boid_id:cell_id
+}

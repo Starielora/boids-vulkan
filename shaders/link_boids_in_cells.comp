@@ -1,0 +1,42 @@
+#version 460
+
+#extension GL_GOOGLE_include_directive : enable
+#extension GL_EXT_debug_printf : require
+
+#include "descriptor_set0.glsl"
+
+layout(push_constant) uniform constants
+{
+    uvec4 cells_max;
+};
+
+void main()
+{
+    uint cell_id = cell_index(gl_GlobalInvocationID, cells_max);
+    uint cell_start = index_in_buffer(0, cell_id);
+
+    bool first_boid_set = false;
+    uint last_boid_id = 0;
+    for (uint i = 0; i < boids_in.length(); ++i)
+    {
+        uvec4 boid_cell_data = cells[cell_start + i];
+
+        if(boid_cell_data.r == 1)
+        {
+            if(!first_boid_set)
+            {
+                last_boid_id = i;
+                cells[cell_start].b = i; // set index of first boid in this cell
+                cells[cell_start + last_boid_id].g = i; // TODO maybe set absolute index in buffer?
+                first_boid_set = true;
+            }
+            else
+            {
+                cells[cell_start + last_boid_id].g = i; // set next boid id in last boid slot
+                last_boid_id = i;
+            }
+        }
+    }
+
+    cells[cell_start + last_boid_id].g = boids_in.length(); // mark last boid in this cell
+}

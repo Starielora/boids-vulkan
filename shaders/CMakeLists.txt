@@ -99,6 +99,12 @@ project(shaders)
         VARIABLE_NAME_HEADER boids_to_cells
     )
 
+    add_shader(COMPUTE
+        INPUT_FILE link_boids_in_cells.comp
+        OUTPUT_FILE link_boids_in_cells.comp.spv
+        VARIABLE_NAME_HEADER link_boids_in_cells
+    )
+
     set(shaders_header_contents
 "#pragma once
 
@@ -117,7 +123,7 @@ namespace shader_path::compute {${compute_shaders}
 ")
     file(GENERATE OUTPUT shaders.h CONTENT "${shaders_header_contents}")
 
-    list(APPEND target_sources shaders.h)
+    list(APPEND target_sources shaders.h descriptor_set0.glsl)
 
     add_custom_target(shaders
         ALL

@@ -58,126 +58,6 @@ namespace optimization
 {
     constexpr auto grid_cells_count = glm::uvec4(3, 3, 3, 0);
 
-    auto create_grid_image(VkDevice logical_device, VkPhysicalDevice physical_device, VkCommandBuffer command_buffer, VkQueue queue, cleanup::queue_type& cleanup_queue)
-    {
-        const auto create_info = VkImageCreateInfo{
-            .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
-            .pNext = nullptr,
-            .flags = 0,
-            .imageType = VK_IMAGE_TYPE_2D,
-            .format = VK_FORMAT_R32G32B32A32_UINT,
-            .extent = VkExtent3D{
-                .width = instances_count,
-                .height = grid_cells_count.x * grid_cells_count.y * grid_cells_count.z,
-                .depth = 1
-            },
-            .mipLevels = 1,
-            .arrayLayers = 1,
-            .samples = VK_SAMPLE_COUNT_1_BIT,
-            .tiling = VK_IMAGE_TILING_OPTIMAL,
-            .usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, // transfer dst to be able to clear texture each frame
-            .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
-            .queueFamilyIndexCount = 0,
-            .pQueueFamilyIndices = nullptr,
-            .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED
-        };
-
-        auto image = VkImage{};
-        VK_CHECK(vkCreateImage(logical_device, &create_info, nullptr, &image));
-
-        auto memory_requirements = VkMemoryRequirements{};
-        vkGetImageMemoryRequirements(logical_device, image, &memory_requirements);
-
-        const auto memory_type_index = find_memory_type_index(physical_device, memory_requirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-
-        const auto allocate_info = VkMemoryAllocateInfo{
-            .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
-            .pNext = nullptr,
-            .allocationSize = memory_requirements.size,
-            .memoryTypeIndex = memory_type_index
-        };
-
-        auto memory = VkDeviceMemory{};
-        VK_CHECK(vkAllocateMemory(logical_device, &allocate_info, nullptr, &memory));
-
-        VK_CHECK(vkBindImageMemory(logical_device, image, memory, {}));
-        const auto subresource_range = VkImageSubresourceRange{
-            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-            .baseMipLevel = 0,
-            .levelCount = 1,
-            .baseArrayLayer = 0,
-            .layerCount = 1
-        };
-
-        const auto image_view_create_info = VkImageViewCreateInfo{
-            .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-            .pNext = nullptr,
-            .flags = 0,
-            .image = image,
-            .viewType = VK_IMAGE_VIEW_TYPE_2D,
-            .format = VK_FORMAT_R32G32B32A32_UINT,
-            .components = VkComponentMapping{},
-            .subresourceRange = subresource_range
-        };
-
-        auto image_view = VkImageView{};
-        VK_CHECK(vkCreateImageView(logical_device, &image_view_create_info, nullptr, &image_view));
-
-        vkResetCommandBuffer(command_buffer, 0);
-        const auto begin_info = VkCommandBufferBeginInfo{
-            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-            .pNext = nullptr,
-            .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
-            .pInheritanceInfo = nullptr
-        };
-        vkBeginCommandBuffer(command_buffer, &begin_info);
-
-        const auto image_memory_barrier = VkImageMemoryBarrier{
-            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-            .pNext = nullptr,
-            .srcAccessMask = 0,
-            .dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
-            .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-            .newLayout = VK_IMAGE_LAYOUT_GENERAL,
-            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .image = image,
-            .subresourceRange = subresource_range,
-        };
-        vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_DEPENDENCY_BY_REGION_BIT, 0, nullptr, 0, nullptr, 1, &image_memory_barrier);
-        vkEndCommandBuffer(command_buffer);
-        const auto fence_info = VkFenceCreateInfo{
-            .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
-            .pNext = nullptr,
-            .flags = 0,
-        };
-        auto fence = VkFence{};
-        VK_CHECK(vkCreateFence(logical_device, &fence_info, nullptr, &fence));
-        const auto submit_info = VkSubmitInfo{
-            .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
-            .pNext = nullptr,
-            .waitSemaphoreCount = 0,
-            .pWaitSemaphores = nullptr,
-            .pWaitDstStageMask = nullptr,
-            .commandBufferCount = 1,
-            .pCommandBuffers = &command_buffer,
-            .signalSemaphoreCount = 0,
-            .pSignalSemaphores = nullptr
-        };
-        VK_CHECK(vkQueueSubmit(queue, 1, &submit_info, fence));
-        VK_CHECK(vkWaitForFences(logical_device, 1, &fence, VK_TRUE, 1000000000));
-        vkDestroyFence(logical_device, fence, nullptr);
-
-        cleanup_queue.push([logical_device, image, image_view, memory]()
-        {
-            vkFreeMemory(logical_device, memory, nullptr);
-            vkDestroyImageView(logical_device, image_view, nullptr);
-            vkDestroyImage(logical_device, image, nullptr);
-        });
-
-        return std::tuple{ image, image_view, memory };
-    }
-
     auto create_boids_to_cells_pipeline(VkDevice logical_device, VkDescriptorSetLayout layout, shaders::module_cache& shaders_cache, cleanup::queue_type& cleanup_queue)
     {
         const auto push_constant_range = VkPushConstantRange{
@@ -213,6 +93,59 @@ namespace optimization
                 .flags = {},
                 .stage = VK_SHADER_STAGE_COMPUTE_BIT,
                 .module = shaders_cache.get_module(shader_path::compute::boids_to_cells),
+                .pName = "main",
+                .pSpecializationInfo = nullptr,
+            },
+            .layout = pipeline_layout,
+            .basePipelineHandle = VK_NULL_HANDLE,
+            .basePipelineIndex = 0
+        };
+
+        auto pipeline = VkPipeline{};
+        VK_CHECK(vkCreateComputePipelines(logical_device, VK_NULL_HANDLE, 1, &create_info, nullptr, &pipeline));
+
+        cleanup_queue.push([logical_device, pipeline](){
+            vkDestroyPipeline(logical_device, pipeline, nullptr);
+        });
+
+        return std::tuple{ pipeline, pipeline_layout };
+    }
+
+    auto create_link_boids_in_cells_pipeline(VkDevice logical_device, VkDescriptorSetLayout layout, shaders::module_cache& shaders_cache, cleanup::queue_type& cleanup_queue)
+    {
+        const auto push_constant_range = VkPushConstantRange{
+            .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
+            .offset = 0,
+            .size = sizeof(glm::uvec4)
+        };
+
+        const auto pipeline_layout_create_info = VkPipelineLayoutCreateInfo{
+             .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+             .pNext = nullptr,
+             .flags = {},
+             .setLayoutCount = 1,
+             .pSetLayouts = &layout,
+             .pushConstantRangeCount = 1,
+             .pPushConstantRanges = &push_constant_range
+        };
+
+        auto pipeline_layout = VkPipelineLayout{};
+        VK_CHECK(vkCreatePipelineLayout(logical_device, &pipeline_layout_create_info, nullptr, &pipeline_layout));
+
+        cleanup_queue.push([logical_device, pipeline_layout] {
+            vkDestroyPipelineLayout(logical_device, pipeline_layout, nullptr);
+        });
+
+        static const auto create_info = VkComputePipelineCreateInfo{
+            .sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = {},
+            .stage = VkPipelineShaderStageCreateInfo{
+                .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                .pNext = nullptr,
+                .flags = {},
+                .stage = VK_SHADER_STAGE_COMPUTE_BIT,
+                .module = shaders_cache.get_module(shader_path::compute::link_boids_in_cells),
                 .pName = "main",
                 .pSpecializationInfo = nullptr,
             },
@@ -408,6 +341,7 @@ int main()
 
     const auto boids_compute_pipeline = create_boids_update_compute_pipeline(logical_device, boids_update::get_pipeline_create_info(logical_device, compute_pipeline_layout, shader_cache), general_queue);
     auto [boids_to_cells_pipeline, boids_to_cells_pipeline_layout] = optimization::create_boids_to_cells_pipeline(logical_device, descriptor_set_layout, shader_cache, general_queue);
+    auto [link_boids_pipeline, link_boids_pipeline_layout] = optimization::create_link_boids_in_cells_pipeline(logical_device, descriptor_set_layout, shader_cache, general_queue);
 
     auto& cone_pipeline = graphics_pipelines[0];
     auto& grid_pipeline = graphics_pipelines[1];
@@ -463,7 +397,10 @@ int main()
     const auto command_pool = create_command_pool(logical_device, queue_family_index, general_queue);
     const auto command_buffers = create_command_buffers(logical_device, command_pool, overlapping_frames_count, general_queue);
 
-    auto [grid_buffer_image, grid_buffer_image_view, grid_buffer_image_memory] = optimization::create_grid_image(logical_device, physical_device, command_buffers[0], present_graphics_compute_queue, general_queue);
+    constexpr auto cells_buffer_size = instances_count * optimization::grid_cells_count.x * optimization::grid_cells_count.y * optimization::grid_cells_count.z * sizeof(glm::uvec4);
+    const auto cells_buffer_padded_size = pad_uniform_buffer_size(cells_buffer_size, physical_device_properties.limits.minUniformBufferOffsetAlignment);
+    const auto& [cells_buffer, cells_memory] = create_buffer(logical_device, physical_device, overlapping_frames_count * cells_buffer_padded_size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, general_queue);
+    const auto cells_buffer_descriptor_buffer_infos = get_descriptor_buffer_infos(cells_buffer, cells_buffer_padded_size, overlapping_frames_count);
 
     const auto cone_vertex_buffer = cone::generate_vertex_data();
     const auto cone_vertex_buffer_size = cone_vertex_buffer.size() * sizeof(vertex);
@@ -582,28 +519,12 @@ int main()
             dir_lights_data_descriptor_buffer_infos[current_frame],
             point_lights_data_descriptor_buffer_infos[current_frame],
             model_data_descriptor_buffer_infos[(current_frame + 1) % overlapping_frames_count],
+            cells_buffer_descriptor_buffer_infos[current_frame],
         };
 
         vkUpdateDescriptorSetWithTemplate(logical_device, descriptor_sets[current_frame], descriptor_update_template, buffer_infos.data());
 
-        const auto image_info = VkDescriptorImageInfo{
-            .sampler = VK_NULL_HANDLE,
-            .imageView = grid_buffer_image_view,
-            .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
-        };
-        const auto grid_image_write = VkWriteDescriptorSet{
-            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .pNext = nullptr,
-            .dstSet = descriptor_sets[current_frame],
-            .dstBinding = 5,
-            .dstArrayElement = 0,
-            .descriptorCount = 1,
-            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
-            .pImageInfo = &image_info,
-            .pBufferInfo = nullptr,
-            .pTexelBufferView = nullptr
-        };
-        vkUpdateDescriptorSets(logical_device, 1, &grid_image_write, 0, nullptr);
+        vkCmdFillBuffer(command_buffer, cells_buffer, current_frame * cells_buffer_padded_size, cells_buffer_padded_size, 0);
         vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, boids_to_cells_pipeline);
         vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, boids_to_cells_pipeline_layout, 0, 1, &descriptor_sets[current_frame], 0, nullptr);
         vkCmdPushConstants(command_buffer, boids_to_cells_pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(aquarium::max_range), &aquarium::max_range[0]);
@@ -611,21 +532,16 @@ int main()
         vkCmdPushConstants(command_buffer, boids_to_cells_pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, sizeof(aquarium::max_range) + sizeof(aquarium::min_range), sizeof(optimization::grid_cells_count), &optimization::grid_cells_count[0]);
         vkCmdDispatch(command_buffer, instances_count, 1, 1);
 
+        vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, link_boids_pipeline);
+        vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, link_boids_pipeline_layout, 0, 1, &descriptor_sets[current_frame], 0, nullptr);
+        vkCmdPushConstants(command_buffer, boids_to_cells_pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(optimization::grid_cells_count), &optimization::grid_cells_count[0]);
+        vkCmdDispatch(command_buffer, optimization::grid_cells_count.x, optimization::grid_cells_count.y, optimization::grid_cells_count.z);
+
         vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, boids_compute_pipeline);
         vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, compute_pipeline_layout, 0, 1, &descriptor_sets[current_frame], 0, nullptr);
         const auto compute_push_constants = std::array<float, 8>{ gui_data.model_scale, gui_data.model_speed, aquarium::scale, gui_data.visual_range, gui_data.cohesion_weight, gui_data.separation_weight, gui_data.alignment_weight, 0.f };
         vkCmdPushConstants(command_buffer, compute_pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(decltype(compute_push_constants)::value_type) * compute_push_constants.size(), compute_push_constants.data());
         vkCmdDispatch(command_buffer, instances_count, 1, 1);
-        const auto cells_buffer_clear_color = VkClearColorValue{};
-        const auto subresource_range = VkImageSubresourceRange{
-            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-            .baseMipLevel = 0,
-            .levelCount = 1,
-            .baseArrayLayer = 0,
-            .layerCount = 1
-        };
-        // clear util texture
-        vkCmdClearColorImage(command_buffer, grid_buffer_image, VK_IMAGE_LAYOUT_GENERAL, &cells_buffer_clear_color, 1, &subresource_range);
 
         const auto render_pass_begin_info = VkRenderPassBeginInfo{
             .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,

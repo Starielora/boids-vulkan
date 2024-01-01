@@ -84,20 +84,63 @@ vec4 steer(uint index, float visual_range, float cohesion_weight, float separati
     vec4 alignment = vec4(0.);
 
     // yeah baby n^2 complexity lets goooo
-    for (uint i = 0; i < boids_in.length(); ++i)
+//    for (uint i = 0; i < boids_in.length(); ++i)
+//    {
+//        if (i != index)
+//        {
+//            const boid b = boids_in[i];
+//            const float dist = distance(current_boid.position, b.position);
+//            if(dist < visual_range)
+//            {
+//                observed_boids++;
+//                avg_observable_cluster_position += b.position;
+//                separation += (current_boid.position - b.position) / abs(dist);
+//                alignment += b.velocity;
+//            }
+//        }
+//    }
+    uint boid_cell_id = cells[index].a; // probably very bad for cache
+    uint cell_start = index_in_buffer(0, boid_cell_id);
+    uint first_boid_in_cell_id = cells[cell_start].b;
+
+    uint currently_processed_boid_id = first_boid_in_cell_id;
+    uvec4 current_cell_boid = cells[cell_start + currently_processed_boid_id];
+
+    debugPrintfEXT("boid cell id %u", boid_cell_id);
+    debugPrintfEXT("cell start %u", cell_start);
+    debugPrintfEXT("entering loop %u", currently_processed_boid_id);
+    uint failsafe = 0;
+
+    while(true) // TODO fix infinite loop
     {
-        if (i != index)
+        if (currently_processed_boid_id != index) // if different boid
         {
-            const boid b = boids_in[i];
+            const boid b = boids_in[currently_processed_boid_id];
             const float dist = distance(current_boid.position, b.position);
-            if(dist < visual_range)
-            {
-                observed_boids++;
-                avg_observable_cluster_position += b.position;
-                separation += (current_boid.position - b.position) / abs(dist);
-                alignment += b.velocity;
-            }
+            observed_boids++;
+            avg_observable_cluster_position += b.position;
+            separation += (current_boid.position - b.position) / abs(dist);
+            alignment += b.velocity;
         }
+
+        if (current_cell_boid.g == boids_in.length())
+        {
+//            debugPrintfEXT("break");
+            break; // this was last boid
+        }
+
+        currently_processed_boid_id = current_cell_boid.g;
+        current_cell_boid = cells[cell_start + currently_processed_boid_id];
+
+        if (current_cell_boid.g == boids_in.length())
+        {
+//            debugPrintfEXT("break");
+            break; // this was last boid
+        }
+
+        failsafe++;
+        if (failsafe == 10)
+            break;
     }
 
     if (observed_boids > 0)

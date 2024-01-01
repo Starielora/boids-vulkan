@@ -4,7 +4,7 @@
 #include "vertex.hpp"
 #include "shader_module_cache.hpp"
 
-#include <Volk/volk.h>
+#include <volk.h>
 #include <array>
 #include <random>
 #include <span>

@@ -2,7 +2,7 @@
 
 #include "shader_module_cache.hpp"
 
-#include <Volk/volk.h>
+#include <volk.h>
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
 
