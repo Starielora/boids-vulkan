@@ -1,45 +1,12 @@
 #version 450
 
+#extension GL_GOOGLE_include_directive : enable
+#include "descriptor_set_0.glsl"
+
 layout(location = 0) in vec4 object_color;
 layout(location = 1) in vec3 normal;
 layout(location = 2) in vec3 world_pos;
 layout(location = 0) out vec4 out_color;
-
-layout(set = 0, binding = 0) uniform CameraData
-{
-    vec4 position;
-    mat4 projview;
-} camera_data;
-
-struct DirectionalLight
-{
-    vec4 direction;
-    vec4 ambient;
-    vec4 diffuse;
-    vec4 specular;
-};
-
-struct PointLight
-{
-    vec4 position;
-    vec4 ambient;
-    vec4 diffuse;
-    vec4 specular;
-
-    float constant;
-    float linear;
-    float quadratic;
-};
-
-layout(set = 0, binding = 2) readonly buffer DirLightsData
-{
-    DirectionalLight directional_lights[];
-};
-
-layout(set = 0, binding = 3) readonly buffer PointLightsData
-{
-    PointLight point_lights[];
-};
 
 vec3 directional_lights_part(vec3 view_dir);
 vec3 point_lights_part(vec3 view_dir);

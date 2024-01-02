@@ -1,5 +1,8 @@
 #version 460 core
 
+#extension GL_GOOGLE_include_directive : enable
+#include "descriptor_set_0.glsl"
+
 vec3 vertices[] = {
     vec3(-0.5f, -0.5f, -0.5f),
     vec3( 0.5f, -0.5f, -0.5f),
@@ -45,30 +48,6 @@ vec3 vertices[] = {
 };
 
 layout(location = 0) out vec4 frag_color;
-
-layout(set = 0, binding = 0) uniform CameraData
-{
-    vec4 position;
-    mat4 projview;
-} camera_data;
-
-struct PointLight
-{
-    vec4 position;
-    vec4 ambient;
-    vec4 diffuse;
-    vec4 specular;
-
-    float constant;
-    float linear;
-    float quadratic;
-    float _;
-};
-
-layout(set = 0, binding = 3) readonly buffer PointLightsData
-{
-    PointLight point_lights[];
-};
 
 void main()
 {

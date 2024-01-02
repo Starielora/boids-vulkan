@@ -1,5 +1,8 @@
 #version 460 core
 
+#extension GL_GOOGLE_include_directive : enable
+#include "descriptor_set_0.glsl"
+
 const vec3 pos[4] = vec3[4](
     vec3(-1.0, 0.0,  1.0),
     vec3(-1.0, 0.0, -1.0),
@@ -10,12 +13,6 @@ const vec3 pos[4] = vec3[4](
 const int indices[6] = int[6](
     0, 1, 2, 1, 3, 2
 );
-
-layout(set = 0, binding = 0) uniform CameraData
-{
-    vec4 position;
-    mat4 projview;
-} camera_data;
 
 layout (location = 0) out vec3 world_pos;
 layout (location = 1) out float grid_size;
