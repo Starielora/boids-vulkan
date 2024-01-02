@@ -84,6 +84,18 @@ project(shaders)
         VARIABLE_NAME_HEADER debug_light_cube
     )
 
+    add_shader(VERTEX
+        INPUT_FILE debug_spatial_hash_cube.vert
+        OUTPUT_FILE debug_spatial_hash_cube.vert.spv
+        VARIABLE_NAME_HEADER debug_spatial_hash_cube
+    )
+
+    add_shader(FRAGMENT
+        INPUT_FILE debug_spatial_hash_cube.frag
+        OUTPUT_FILE debug_spatial_hash_cube.frag.spv
+        VARIABLE_NAME_HEADER debug_spatial_hash_cube
+    )
+
     set(shaders_header_contents
 "#pragma once
 

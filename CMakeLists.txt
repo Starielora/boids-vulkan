@@ -31,6 +31,8 @@ project(boids-vulkan)
         src/vertex.hpp
         src/shader_module_cache.hpp
         src/shader_module_cache.cpp
+        src/debug_cube.hpp
+        src/debug_cube.cpp
     )
 
     target_link_libraries(boids PRIVATE volk glm glfw spdlog::spdlog imgui)

@@ -11,6 +11,7 @@
 #include "gui.hpp"
 #include "shader_module_cache.hpp"
 #include "constants.hpp"
+#include "debug_cube.hpp"
 
 #include <glm/glm.hpp>
 #include <spdlog/spdlog.h>
@@ -155,6 +156,7 @@ auto recreate_graphics_pipeline_and_swapchain(GLFWwindow* window, VkDevice logic
         grid::get_pipeline_create_info(logical_device, pipeline_layout, render_pass, window_extent, shaders_cache),
         aquarium::get_pipeline_create_info(logical_device, pipeline_layout, render_pass, window_extent, shaders_cache),
         light::get_pipeline_create_info(logical_device, pipeline_layout, render_pass, window_extent, shaders_cache),
+        debug_cube::get_pipeline_create_info(logical_device, pipeline_layout, render_pass, window_extent, shaders_cache),
     }, cleanup_queue);
     const auto& [swapchain, surface_format] = create_swapchain(logical_device, physical_device, surface, queue_family_index, window_extent, cleanup_queue);
     const auto& [swapchain_images, swapchain_image_views] = get_swapchain_images(logical_device, swapchain, surface_format.format, cleanup_queue);
@@ -217,12 +219,14 @@ int main()
         grid::get_pipeline_create_info(logical_device, pipeline_layout, render_pass, window_extent, shader_cache),
         aquarium::get_pipeline_create_info(logical_device, pipeline_layout, render_pass, window_extent, shader_cache),
         light::get_pipeline_create_info(logical_device, pipeline_layout, render_pass, window_extent, shader_cache),
+        debug_cube::get_pipeline_create_info(logical_device, pipeline_layout, render_pass, window_extent, shader_cache)
     }, swapchain_queue);
 
     auto& cone_pipeline = graphics_pipelines[0];
     auto& grid_pipeline = graphics_pipelines[1];
     auto& aquarium_pipeline = graphics_pipelines[2];
-    auto& debug_cube_pipeilne = graphics_pipelines[3];
+    auto& debug_light_pipeilne = graphics_pipelines[3];
+    auto& spatial_hash_debug_pipeline = graphics_pipelines[4];
 
     constexpr auto overlapping_frames_count = 2;
 
@@ -331,7 +335,8 @@ int main()
                 cone_pipeline = graphics_pipelines[0];
                 grid_pipeline = graphics_pipelines[1];
                 aquarium_pipeline = graphics_pipelines[2];
-                debug_cube_pipeilne = graphics_pipelines[3];
+                debug_light_pipeilne = graphics_pipelines[3];
+                spatial_hash_debug_pipeline = graphics_pipelines[4];
                 continue;
             }
             else if (result != VK_SUCCESS)
@@ -430,16 +435,21 @@ int main()
 
         vkCmdBeginRenderPass(command_buffer, &render_pass_begin_info, VK_SUBPASS_CONTENTS_INLINE);
 
-        vkCmdPushConstants(command_buffer, pipeline_layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(float), &aquarium::scale);
         vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout, 0, 1, &descriptor_sets[current_frame], 0, nullptr);
         vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, cone_pipeline);
         const auto offsets = std::array{ VkDeviceSize{ 0 } };
         vkCmdBindVertexBuffers(command_buffer, 0, 1, &vertex_buffer, offsets.data());
         vkCmdDraw(command_buffer, cone_vertex_buffer.size(), instances_count, 0, 0);
 
-        vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, debug_cube_pipeilne);
+        vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, debug_light_pipeilne);
         vkCmdDraw(command_buffer, 36, lights.point_lights.size(), 0, 0);
 
+        const float sc = 1.f;
+        vkCmdPushConstants(command_buffer, pipeline_layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(float), &sc);
+        vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, spatial_hash_debug_pipeline);
+        vkCmdDraw(command_buffer, 36, 1, 0, 0);
+
+        vkCmdPushConstants(command_buffer, pipeline_layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(float), &aquarium::scale);
         vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, aquarium_pipeline);
         vkCmdDraw(command_buffer, 36, 1, 0, 0);
 
