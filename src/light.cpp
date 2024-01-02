@@ -122,7 +122,7 @@ namespace light
                 .pNext = nullptr,
                 .flags = 0,
                 .stage = VK_SHADER_STAGE_VERTEX_BIT,
-                .module = shaders_cache.get_module(shader_path::vertex::cube),
+                .module = shaders_cache.get_module(shader_path::vertex::debug_light_cube),
                 .pName = shader_entry_point.data(),
                 .pSpecializationInfo = nullptr
             },
@@ -131,7 +131,7 @@ namespace light
                 .pNext = nullptr,
                 .flags = 0,
                 .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
-                .module = shaders_cache.get_module(shader_path::fragment::cube),
+                .module = shaders_cache.get_module(shader_path::fragment::debug_light_cube),
                 .pName = shader_entry_point.data(),
                 .pSpecializationInfo = nullptr
             }

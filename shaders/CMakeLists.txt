@@ -73,15 +73,15 @@ project(shaders)
     )
 
     add_shader(VERTEX
-        INPUT_FILE debug_cube.vert
-        OUTPUT_FILE debug_cube.vert.spv
-        VARIABLE_NAME_HEADER cube
+        INPUT_FILE debug_light_cube.vert
+        OUTPUT_FILE debug_light_cube.vert.spv
+        VARIABLE_NAME_HEADER debug_light_cube
     )
 
     add_shader(FRAGMENT
-        INPUT_FILE debug_cube.frag
-        OUTPUT_FILE debug_cube.frag.spv
-        VARIABLE_NAME_HEADER cube
+        INPUT_FILE debug_light_cube.frag
+        OUTPUT_FILE debug_light_cube.frag.spv
+        VARIABLE_NAME_HEADER debug_light_cube
     )
 
     set(shaders_header_contents
