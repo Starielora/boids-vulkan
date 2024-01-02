@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <fstream>
+#include <glm/glm.hpp>
 
 namespace window
 {
@@ -584,7 +585,7 @@ VkPipelineLayout create_pipeline_layout(VkDevice logical_device, const std::vect
     const auto push_constant_range = VkPushConstantRange{
         .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
         .offset = 0,
-        .size = sizeof(float)
+        .size = sizeof(glm::vec4)
     };
 
     const auto pipeline_layout_create_info = VkPipelineLayoutCreateInfo{
@@ -964,6 +965,13 @@ VkDescriptorSetLayout create_descriptor_sets_layouts(VkDevice logical_device, cl
             .descriptorCount = 1,
             .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
             .pImmutableSamplers = nullptr
+        },
+        VkDescriptorSetLayoutBinding{
+            .binding = 4,
+            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .descriptorCount = 1,
+            .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
+            .pImmutableSamplers = nullptr
         }
     };
 
@@ -1069,6 +1077,14 @@ VkDescriptorUpdateTemplate create_descriptor_update_template(VkDevice logical_de
             .descriptorCount = 1,
             .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
             .offset = 3*sizeof(VkDescriptorBufferInfo), // TODO lmao, fix this shit. It's an offset in pData array of vkCmdUpdateDescriptorSetWithTemplate
+            .stride = 0
+        },
+        VkDescriptorUpdateTemplateEntry {
+            .dstBinding = 4,
+            .dstArrayElement = 0,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .offset = 4*sizeof(VkDescriptorBufferInfo), // TODO lmao, fix this shit. It's an offset in pData array of vkCmdUpdateDescriptorSetWithTemplate
             .stride = 0
         },
     };

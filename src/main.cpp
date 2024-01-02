@@ -19,6 +19,7 @@
 
 #include <vector>
 #include <array>
+#include <cmath>
 
 constexpr bool VALIDATION_LAYERS = true;
 
@@ -41,9 +42,54 @@ auto model_scale = glm::vec3(0.5, 0.5, 0.5);
 
 namespace aquarium
 {
-    constexpr float scale = 30.f;
-    const auto min_range = glm::vec3(-scale, 0.f, -scale);
-    const auto max_range = glm::vec3(scale, scale, scale);
+    constexpr float scale_factor = 30.f;
+    constexpr auto min_range = glm::vec3(-scale_factor, 0.f, -scale_factor);
+    constexpr auto max_range = glm::vec3(scale_factor, scale_factor, scale_factor);
+    constexpr auto scale = glm::vec4((max_range - min_range) / 2.f, 1.f);
+    constexpr auto cells_count = glm::ivec3(2, 2, 2);
+    const auto cell_size = glm::vec3((std::abs(min_range.x) + std::abs(max_range.x)) / cells_count.x, (std::abs(min_range.y) + std::abs(max_range.y)) / cells_count.y, (std::abs(min_range.z) + std::abs(max_range.z)) / cells_count.z); // glm has not enough constexprs :(
+    constexpr auto cell_scale = scale / glm::vec4(cells_count, 1.f);
+
+    struct cell
+    {
+        //glm::vec3 min;
+        //glm::vec3 max;
+        glm::vec4 pos;
+    };
+
+    constexpr auto get_cell_index(glm::ivec3 pos)
+    {
+        assert(pos.x < cells_count.x);
+        assert(pos.y < cells_count.y);
+        assert(pos.z < cells_count.z);
+
+        constexpr auto x_max = cells_count.x;
+        constexpr auto y_max = cells_count.y;
+
+        return pos.x + x_max * pos.y + x_max * y_max * pos.z;
+    }
+
+    //static_assert(get_cell_index(glm::ivec3{ 1, 1, 1 }) == 7);
+
+    auto divide_aquarium()
+    {
+        auto cells = std::array<cell, cells_count.x * cells_count.y * cells_count.z>{};
+
+        for (int z = 0; z < cells_count.z; z++)
+        {
+            for (int y = 0; y < cells_count.y; ++y)
+            {
+                for (int x = 0; x < cells_count.x; ++x)
+                {
+                    const auto index = get_cell_index(glm::ivec3{ x, y, z });
+                    auto& cell = cells[index];
+                    cell.pos = glm::vec4{ x * cell_size.x + cell_size.x / 2.f + min_range.x, y * cell_size.y + cell_size.y / 2.f + min_range.y, z * cell_size.z + cell_size.z / 2.f + min_range.z, 0.f};
+                }
+            }
+        }
+
+        return cells;
+    }
 
     const auto wall_repellents = get_wall_repellents(min_range, max_range, wall_force_weight);
 }
@@ -271,6 +317,15 @@ int main()
     VK_CHECK(vkMapMemory(logical_device, point_lights_data_memory, 0, VK_WHOLE_SIZE, 0, &point_lights_data_memory_ptr));
     const auto point_lights_data_descriptor_buffer_infos = get_descriptor_buffer_infos(point_lights_data_buffer, point_lights_data_padded_size, overlapping_frames_count);
 
+    const auto aquarium_cells_cpu_data = aquarium::divide_aquarium();
+    // TODO this memory does not have to be duplicated per frame because it is static and readonly
+    const auto aquarium_cells_data_padded_size = pad_uniform_buffer_size(aquarium_cells_cpu_data.size() * sizeof(decltype(aquarium_cells_cpu_data)::value_type), physical_device_properties.limits.minUniformBufferOffsetAlignment);
+    const auto& [aquarium_cells_gpu_data_buffer, aquarium_cells_gpu_data_memory] = create_buffer(logical_device, physical_device, overlapping_frames_count * aquarium_cells_data_padded_size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, general_queue);
+    void* aquarium_cells_data_memory_ptr = nullptr;
+    copy_memory(logical_device, aquarium_cells_gpu_data_memory, 0, aquarium_cells_cpu_data.data(), aquarium_cells_cpu_data.size() * sizeof(decltype(aquarium_cells_cpu_data)::value_type));
+    copy_memory(logical_device, aquarium_cells_gpu_data_memory, aquarium_cells_data_padded_size, aquarium_cells_cpu_data.data(), aquarium_cells_cpu_data.size() * sizeof(decltype(aquarium_cells_cpu_data)::value_type));
+    const auto aquarium_cells_data_descriptor_buffer_infos = get_descriptor_buffer_infos(aquarium_cells_gpu_data_buffer, aquarium_cells_data_padded_size, overlapping_frames_count);
+
     auto [color_image, color_image_view, color_image_memory] = create_color_image(logical_device, physical_device, surface_format.format, window_extent, swapchain_queue);
     auto [depth_image, depth_image_view, depth_image_memory] = create_depth_image(logical_device, physical_device, window_extent, swapchain_queue);
 
@@ -416,7 +471,8 @@ int main()
             camera_data_descriptor_buffer_infos[current_frame],
             model_data_descriptor_buffer_infos[current_frame],
             dir_lights_data_descriptor_buffer_infos[current_frame],
-            point_lights_data_descriptor_buffer_infos[current_frame]
+            point_lights_data_descriptor_buffer_infos[current_frame],
+            aquarium_cells_data_descriptor_buffer_infos[current_frame],
         };
         vkUpdateDescriptorSetWithTemplate(logical_device, descriptor_sets[current_frame], descriptor_update_template, buffer_infos.data());
 
@@ -444,17 +500,16 @@ int main()
         vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, debug_light_pipeilne);
         vkCmdDraw(command_buffer, 36, lights.point_lights.size(), 0, 0);
 
-        const float sc = 1.f;
-        vkCmdPushConstants(command_buffer, pipeline_layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(float), &sc);
-        vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, spatial_hash_debug_pipeline);
-        vkCmdDraw(command_buffer, 36, 1, 0, 0);
-
-        vkCmdPushConstants(command_buffer, pipeline_layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(float), &aquarium::scale);
+        vkCmdPushConstants(command_buffer, pipeline_layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::vec4), &aquarium::scale[0]);
         vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, aquarium_pipeline);
         vkCmdDraw(command_buffer, 36, 1, 0, 0);
 
         vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, grid_pipeline);
         vkCmdDraw(command_buffer, 6, 1, 0, 0);
+
+        vkCmdPushConstants(command_buffer, pipeline_layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::vec4), &aquarium::cell_scale[0]);
+        vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, spatial_hash_debug_pipeline);
+        vkCmdDraw(command_buffer, 36, aquarium_cells_cpu_data.size(), 0, 0);
 
         gui::draw(command_buffer, gui_data);
 

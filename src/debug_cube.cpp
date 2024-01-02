@@ -57,14 +57,14 @@ namespace debug_cube
         .flags = 0,
         .depthClampEnable = VK_FALSE,
         .rasterizerDiscardEnable = VK_FALSE,
-        .polygonMode = VK_POLYGON_MODE_LINE,
+        .polygonMode = VK_POLYGON_MODE_FILL,
         .cullMode = VK_CULL_MODE_NONE,
         .frontFace = VK_FRONT_FACE_CLOCKWISE,
         .depthBiasEnable = VK_FALSE,
         .depthBiasConstantFactor = 0.f,
         .depthBiasClamp = 0.f,
         .depthBiasSlopeFactor = 0.f,
-        .lineWidth = 10.f
+        .lineWidth = 5.f
     };
 
     constexpr auto multisample_state = VkPipelineMultisampleStateCreateInfo{

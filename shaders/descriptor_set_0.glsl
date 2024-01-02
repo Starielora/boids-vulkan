@@ -27,6 +27,11 @@ struct PointLight
     float quadratic;
 };
 
+struct aquarium_cell
+{
+    vec4 pos;
+};
+
 layout(set = 0, binding = 0) uniform CameraData
 {
     vec4 position;
@@ -46,4 +51,9 @@ layout(set = 0, binding = 2) readonly buffer DirLightsData
 layout(set = 0, binding = 3) readonly buffer PointLightsData
 {
     PointLight point_lights[];
+};
+
+layout(set = 0, binding = 4) readonly buffer AquariumCells
+{
+    aquarium_cell aquarium_cells[];
 };

@@ -4,14 +4,14 @@
 #include "descriptor_set_0.glsl"
 
 const vec3 pos[] = vec3[](
-    vec3(-1.0,  0.0,  1.0),
+    vec3(-1.0,  -1.0,  1.0),
     vec3( 1.0,  1.0,  1.0),
     vec3(-1.0,  1.0,  1.0),
-    vec3( 1.0,  0.0,  1.0),
-    vec3(-1.0,  0.0, -1.0),
+    vec3( 1.0,  -1.0,  1.0),
+    vec3(-1.0,  -1.0, -1.0),
     vec3( 1.0,  1.0, -1.0),
     vec3(-1.0,  1.0, -1.0),
-    vec3( 1.0,  0.0, -1.0)
+    vec3( 1.0,  -1.0, -1.0)
 );
 
 const int indices[] = int[](
@@ -25,10 +25,10 @@ const int indices[] = int[](
 
 layout(push_constant) uniform constants
 {
-    float scale;
+    vec4 scale;
 } push_constants;
 
 void main()
 {
-    gl_Position = camera_data.projview * vec4(push_constants.scale * pos[indices[gl_VertexIndex]], 1.0);
+    gl_Position = camera_data.projview * vec4(push_constants.scale.xyz * (pos[indices[gl_VertexIndex]] + vec3(0., 1., 0.)), 1.0);
 }
