@@ -4,7 +4,7 @@
 #include "vertex.hpp"
 #include "setup.hpp"
 
-#include <Volk/volk.h>
+#include <volk.h>
 #include <glm/glm.hpp>
 
 #include <array>
